@@ -1,7 +1,15 @@
 const { getIdsByImage, getProductDetails, searchByKeywords, searchByProductId } = require('../services/aliexpress.js');
 
 const AFFILIATE_ID = process.env.ALI_TRACKING_ID || 'ali_smart_finder_v1';
-const MAX_QUERY_LENGTH = 100; // AliExpress API limit safety
+const MAX_QUERY_LENGTH = 100;
+
+// Category keywords for filtering
+const CATEGORY_KEYWORDS = {
+  clothing: ['t-shirt', 'shirt', 'dress', 'pants', 'jeans', 'skirt', 'jacket', 'coat', 'sweater', 'hoodie', 'blouse', 'top', 'bottom', 'clothing', 'apparel', 'fashion', 'wear', 'outfit', 'women', 'men', 'y2k', 'vintage', 'casual', 'sexy', 'slim', 'oversized'],
+  games: ['chess', 'board game', 'puzzle', 'toy', 'game', 'playing cards', 'dice', 'checker', 'backgammon', 'monopoly'],
+  electronics: ['phone', 'laptop', 'headphone', 'earphone', 'charger', 'cable', 'electronic', 'device', 'gadget', 'smart', 'wireless', 'bluetooth'],
+  home: ['furniture', 'decor', 'kitchen', 'bathroom', 'bedroom', 'living room', 'home', 'house', 'apartment', 'interior']
+};
 
 function applyCORS(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -11,78 +19,120 @@ function applyCORS(res) {
 }
 
 /**
- * Smart Truncation: Limit query length to prevent API errors.
+ * Detect product category from title/query
  */
+function detectCategory(text) {
+  if (!text) return null;
+  const lower = text.toLowerCase();
+  
+  for (const [category, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
+    if (keywords.some(kw => lower.includes(kw))) {
+      return category;
+    }
+  }
+  return null;
+}
+
+/**
+ * Smart Clean: Strip adjectives and structure words, keep only product essence.
+ * "3 in 1 Chess Board Folding Wooden Portable..." → "Chess Board Wooden"
+ */
+function smartClean(query) {
+  if (!query || typeof query !== 'string') return '';
+  
+  // Words to remove: adjectives + structure words
+  const noiseWords = [
+    // Adjectives
+    'new', 'luxury', '2026', '2025', '2024', '2023', '2022', 'best', 'premium', 'high', 'quality',
+    'original', 'genuine', 'authentic', 'official', 'deluxe', 'superior', 'excellent',
+    'amazing', 'awesome', 'fantastic', 'wonderful', 'perfect', 'beautiful', 'elegant',
+    'stylish', 'modern', 'latest', 'trendy', 'fashionable', 'popular', 'hot', 'top',
+    'professional', 'pro', 'max', 'plus', 'advanced', 'enhanced', 'upgraded', 'improved',
+    'special', 'limited', 'exclusive', 'sale', 'discount', 'cheap', 'free', 'hot sale',
+    'large', 'small', 'big', 'tiny', 'mini', 'huge', 'compact', 'slim', 'thin', 'wide',
+    'brand', 'used', 'refurbished', 'vintage', 'classic', 'retro',
+    'very', 'really', 'super', 'ultra', 'mega', 'extra',
+    // Structure/Function words
+    'portable', 'folding', 'foldable', 'set', 'kit', 'pack', 'bundle', 'collection',
+    '3 in 1', '2 in 1', '4 in 1', '5 in 1', 'multi', 'all in one',
+    'for adults', 'for kids', 'for children', 'for women', 'for men', 'unisex',
+    'with', 'and', 'or', 'the', 'a', 'an', 'in', 'on', 'at', 'to', 'of'
+  ];
+  
+  let cleaned = query.toLowerCase();
+  
+  // Remove noise words
+  for (const word of noiseWords) {
+    cleaned = cleaned.replace(new RegExp(`\\b${word}\\b`, 'gi'), ' ');
+  }
+  
+  // Remove numbers standing alone (like "3" in "3 in 1")
+  cleaned = cleaned.replace(/\b\d+\b/g, ' ');
+  
+  // Clean up multiple spaces and trim
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+  
+  // Get meaningful words (3+ chars)
+  const words = cleaned.split(' ').filter(w => w.length >= 3);
+  
+  // If too few words, fallback to original first 3 meaningful words
+  if (words.length < 2) {
+    const originalWords = query.toLowerCase().split(/\s+/).filter(w => w.length >= 3);
+    return originalWords.slice(0, 3).join(' ');
+  }
+  
+  return words.join(' ');
+}
+
 function smartTruncate(text, maxLength = MAX_QUERY_LENGTH) {
   if (!text || typeof text !== 'string') return '';
   const trimmed = text.trim();
   if (trimmed.length <= maxLength) return trimmed;
-  // Truncate at last space before limit to avoid cutting words
   const truncated = trimmed.substring(0, maxLength);
   const lastSpace = truncated.lastIndexOf(' ');
   return lastSpace > 0 ? truncated.substring(0, lastSpace) : truncated;
 }
 
-/**
- * Smart Clean: Strip common adjectives and marketing words from query.
- */
-function smartClean(query) {
-  if (!query || typeof query !== 'string') return '';
-  
-  const adjectives = [
-    'new', 'luxury', '2026', '2025', '2024', '2023', '2022', 'best', 'premium', 'high', 'quality',
-    'original', 'genuine', 'authentic', 'official', 'deluxe', 'superior', 'excellent',
-    'amazing', 'awesome', 'fantastic', 'wonderful', 'perfect', 'beautiful', 'elegant',
-    'stylish', 'modern', 'latest', 'trendy', 'fashionable', 'popular', 'hot', 'top',
-    'large', 'small', 'big', 'tiny', 'mini', 'huge', 'compact', 'portable',
-    'lightweight', 'heavy', 'slim', 'thin', 'wide', 'brand', 'used', 'refurbished',
-    'vintage', 'classic', 'retro', 'very', 'really', 'super', 'ultra', 'mega',
-    'extra', 'pro', 'max', 'plus', 'advanced', 'enhanced', 'upgraded', 'improved',
-    'special', 'limited', 'exclusive', 'sale', 'discount', 'cheap', 'free'
-  ];
-  
-  const words = query.trim().toLowerCase().split(/\s+/).filter(w => w.length > 0);
-  const cleaned = words.filter(word => !adjectives.includes(word) && word.length > 2);
-  
-  // If cleaning removed everything, fallback to first 3 words
-  return cleaned.join(' ') || words.slice(0, 3).join(' ');
-}
-
-/**
- * Sanitize productId - remove non-numeric characters.
- */
 function sanitizeProductId(id) {
   if (!id || typeof id !== 'string') return null;
-  const cleaned = id.replace(/\D/g, ''); // Remove all non-digits
+  const cleaned = id.replace(/\D/g, '');
   return cleaned.length > 0 ? cleaned : null;
 }
 
-/**
- * Sanitize image URL - fix common issues.
- */
 function sanitizeImageUrl(url) {
   if (!url || typeof url !== 'string') return null;
   let cleaned = url.trim();
   
-  // Reject data URIs and blob URLs
   if (cleaned.startsWith('data:') || cleaned.startsWith('blob:')) return null;
-  
-  // Handle protocol-relative URLs
   if (cleaned.startsWith('//')) cleaned = 'https:' + cleaned;
-  
-  // Remove query params that often break image search
   cleaned = cleaned.split('?')[0];
   
-  // Ensure valid image extension
-  const hasValidExt = /\.(jpg|jpeg|png|webp|gif|bmp)([^a-z]|$)/i.test(cleaned);
-  if (!hasValidExt) {
-    // Try to fix common AliExpress image patterns
-    if (cleaned.includes('aliexpress')) {
-      cleaned = cleaned.replace(/_\d+x\d+\.jpg_.*$/, '.jpg');
-    }
-  }
-  
   return cleaned;
+}
+
+/**
+ * Filter products by category - remove mismatched categories
+ */
+function filterByCategory(products, sourceCategory) {
+  if (!sourceCategory || !Array.isArray(products)) return products;
+  
+  return products.filter(product => {
+    const productCategory = detectCategory(product.title);
+    // Keep if no category detected or matches source
+    if (!productCategory) return true;
+    return productCategory === sourceCategory;
+  });
+}
+
+/**
+ * Normalize image URLs to always use https://
+ */
+function normalizeImageUrl(url) {
+  if (!url) return '';
+  let normalized = String(url);
+  if (normalized.startsWith('//')) normalized = 'https:' + normalized;
+  if (normalized.startsWith('http://')) normalized = normalized.replace('http://', 'https://');
+  return normalized;
 }
 
 function enrichProducts(products) {
@@ -94,13 +144,10 @@ function enrichProducts(products) {
       ? `${affiliateUrl}&aff_id=${AFFILIATE_ID}`
       : `${affiliateUrl}?aff_id=${AFFILIATE_ID}`;
     
-    let imgUrl = product.productImage || product.imageUrl || '';
-    if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
-    
     return {
       title: String(product.title || '').substring(0, 200),
       price: String(product.price || ''),
-      imgUrl: String(imgUrl || ''),
+      imgUrl: normalizeImageUrl(product.productImage || product.imageUrl || ''),
       productUrl: String(finalUrl || ''),
       rating: product.rating || null,
       productId: String(product.productId || '')
@@ -109,99 +156,110 @@ function enrichProducts(products) {
 }
 
 module.exports = async function handler(req, res) {
-  // Always set CORS first
   applyCORS(res);
 
-  // Handle OPTIONS preflight - return empty success
+  // Bulletproof: Always return 200 with JSON
   if (req.method === 'OPTIONS') {
     return res.status(200).json({ success: true, products: [], count: 0 });
   }
 
-  // Reject non-GET with empty success (never crash the extension)
   if (req.method !== 'GET') {
     return res.status(200).json({ success: true, products: [], count: 0 });
   }
 
   try {
-    // Safely extract parameters with defaults
-    const q = req.query?.q || req.query?.query || '';
+    // Extract parameters
+    const q = req.query?.q || req.query?.query || req.query?.title || '';
+    const searchMode = req.query?.searchMode || 'exact'; // 'exact' or 'visual'
     const rawProductId = req.query?.productId || '';
     const rawImgUrl = req.query?.imgUrl || req.query?.imageUrl || '';
 
-    // Sanitize inputs
+    // Sanitize
     const productId = sanitizeProductId(rawProductId);
     const image = sanitizeImageUrl(rawImgUrl);
+    const sourceCategory = detectCategory(q);
 
-    console.log('[API] Inputs:', { 
-      productId: productId || 'none', 
-      hasImage: !!image, 
-      q: q ? 'present' : 'none' 
-    });
+    console.log('[API] Mode:', searchMode, '| Category:', sourceCategory, '| PID:', productId || 'none', '| Img:', !!image);
 
     let results = [];
 
-    // Priority 1: Product ID search (fetch Related Products)
-    if (productId) {
-      try {
-        console.log('[API] Priority 1: ProductId search');
-        results = await searchByProductId(productId);
-        console.log('[API] ProductId result:', results.length, 'items');
-      } catch (e) {
-        console.log('[API] ProductId search failed:', e.message);
-        results = [];
-      }
-    }
-
-    // Priority 2: Visual search with imgUrl (if no results)
-    if (results.length === 0 && image) {
-      try {
-        console.log('[API] Priority 2: Visual search');
-        const imageResult = await getIdsByImage(image);
-        if (imageResult?.productIds?.length > 0) {
-          results = await getProductDetails(imageResult.productIds);
+    // =====================================================
+    // MODE: EXACT (find same product from other sellers)
+    // =====================================================
+    if (searchMode === 'exact') {
+      // Priority 1: Product ID search
+      if (productId) {
+        try {
+          console.log('[API] EXACT Priority 1: ProductId search');
+          results = await searchByProductId(productId);
+          console.log('[API] ProductId found:', results.length);
+        } catch (e) {
+          console.log('[API] ProductId failed:', e.message);
         }
-        console.log('[API] Visual result:', results.length, 'items');
-      } catch (e) {
-        console.log('[API] Visual search failed:', e.message);
-        results = [];
       }
-    }
 
-    // Priority 3: Keyword search with Smart Clean + Smart Truncate
-    if (results.length === 0 && q) {
-      try {
-        console.log('[API] Priority 3: Keyword search');
-        
-        // Step 1: Clean the query
-        const cleanedQuery = smartClean(q);
-        console.log('[API] Smart Clean:', q.substring(0, 50), '->', cleanedQuery.substring(0, 50));
-        
-        // Step 2: Truncate to safe length
-        const safeQuery = smartTruncate(cleanedQuery || q);
-        
-        if (safeQuery) {
-          results = await searchByKeywords(safeQuery);
+      // Priority 2: Cleaned text search
+      if (results.length === 0 && q) {
+        try {
+          console.log('[API] EXACT Priority 2: Cleaned text search');
+          const cleaned = smartClean(q);
+          const safeQuery = smartTruncate(cleaned || q);
+          console.log('[API] Cleaned:', q.substring(0, 40), '→', safeQuery);
+          
+          if (safeQuery) {
+            results = await searchByKeywords(safeQuery);
+          }
+        } catch (e) {
+          console.log('[API] Text search failed:', e.message);
         }
-        console.log('[API] Keyword result:', results.length, 'items');
-      } catch (e) {
-        console.log('[API] Keyword search failed:', e.message);
-        results = [];
       }
     }
 
-    // Return enriched results
+    // =====================================================
+    // MODE: VISUAL (find visually similar products)
+    // =====================================================
+    else if (searchMode === 'visual') {
+      // Priority 1: Visual search ONLY (ignores title)
+      if (image) {
+        try {
+          console.log('[API] VISUAL Priority 1: Visual search');
+          const imageResult = await getIdsByImage(image);
+          if (imageResult?.productIds?.length > 0) {
+            results = await getProductDetails(imageResult.productIds);
+          }
+          console.log('[API] Visual found:', results.length);
+        } catch (e) {
+          console.log('[API] Visual failed:', e.message);
+        }
+      }
+    }
+
+    // =====================================================
+    // RANKING & SAFETY LAYER
+    // =====================================================
+    
+    // Category filtering
+    if (results.length > 0 && sourceCategory) {
+      const beforeFilter = results.length;
+      results = filterByCategory(results, sourceCategory);
+      console.log('[API] Category filter:', beforeFilter, '→', results.length, '(', sourceCategory, ')');
+    }
+
+    // Enrich and return
     const enriched = enrichProducts(results);
     
     return res.status(200).json({
       success: true,
       products: enriched,
       data: enriched,
-      count: enriched.length
+      count: enriched.length,
+      mode: searchMode,
+      category: sourceCategory
     });
 
   } catch (error) {
-    // Bulletproof: Never crash the extension
-    console.error('[API] Critical error:', error?.message || 'Unknown error');
+    // Absolute bulletproof safety
+    console.error('[API] Fatal error:', error?.message || 'Unknown');
     return res.status(200).json({
       success: true,
       products: [],
