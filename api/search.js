@@ -54,12 +54,20 @@ module.exports = async function handler(req, res) {
 
   try {
     // Parameter extraction for image search
-    let { q } = req.query;
+    let { q, productId } = req.query;
     const image = req.query.imageUrl || req.query.imgUrl;
 
     // Treat "Aliexpress" as empty to prevent useless searches
     if (q === 'Aliexpress') {
       q = null;
+    }
+
+    // PRIORITY: Visual search (imgUrl) is stronger and more accurate
+    // If imgUrl exists, completely ignore productId to avoid conflicting constraints
+    // that result in zero results. Visual search works best alone.
+    if (image && productId) {
+      console.log('[API Search] Prioritizing visual search. Ignoring productId:', productId);
+      productId = null;
     }
 
     // Validation: both q and image are missing
@@ -80,9 +88,14 @@ module.exports = async function handler(req, res) {
     console.log('[API Search] Fetching product IDs for image:', image);
 
     // Call the service function to get product IDs
-    const productIds = await getIdsByImage(image);
+    const imageSearchResult = await getIdsByImage(image);
+    const productIds = imageSearchResult.productIds || [];
+    const searchDebug = imageSearchResult.debug;
 
     console.log('[API Search] Found', productIds.length, 'product IDs');
+    if (searchDebug) {
+      console.log('[API Search] Debug info:', JSON.stringify(searchDebug));
+    }
 
     if (productIds.length === 0) {
       return res.status(200).json({
@@ -91,7 +104,8 @@ module.exports = async function handler(req, res) {
         products: [],
         data: [],
         count: 0,
-        message: 'No products found'
+        message: searchDebug?.hint || 'No products found',
+        debug: process.env.NODE_ENV !== 'production' ? searchDebug : undefined
       });
     }
 

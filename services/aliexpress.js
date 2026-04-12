@@ -11,6 +11,28 @@ const API_URL = 'https://api-sg.aliexpress.com/sync';
  */
 async function getIdsByImage(imageUrl) {
     try {
+        // Validation: Check if imageUrl is provided and valid
+        if (!imageUrl) {
+            console.error('[getIdsByImage] No imageUrl provided');
+            return { productIds: [], debug: { error: 'No imageUrl provided' } };
+        }
+
+        // Check for problematic URL patterns
+        if (imageUrl.startsWith('data:')) {
+            console.error('[getIdsByImage] Cannot search with data URI image');
+            return { productIds: [], debug: { error: 'Data URI not supported', imageUrl } };
+        }
+        if (imageUrl.startsWith('blob:')) {
+            console.error('[getIdsByImage] Cannot search with blob URL');
+            return { productIds: [], debug: { error: 'Blob URL not supported', imageUrl } };
+        }
+        if (imageUrl.includes('localhost') || imageUrl.includes('127.0.0.1')) {
+            console.error('[getIdsByImage] Cannot search with localhost image');
+            return { productIds: [], debug: { error: 'Localhost images not accessible', imageUrl } };
+        }
+
+        console.log('[getIdsByImage] Searching with imageUrl:', imageUrl);
+
         // הכתובת של עלי-אקספרס לחיפוש תמונות
         const url = `https://www.aliexpress.com/fn/search-image/index?imageAddress=${encodeURIComponent(imageUrl)}`;
 
@@ -19,21 +41,55 @@ async function getIdsByImage(imageUrl) {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
                 'Accept-Language': 'he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7'
-            }
+            },
+            timeout: 15000
         });
 
         // חיפוש מזהי מוצר בתוך ה-HTML שחוזר (באמצעות Regex)
         const html = response.data;
+        
+        // Debug: Log HTML length and check for common error indicators
+        console.log('[getIdsByImage] Response HTML length:', html.length);
+        
         const regex = /"productId":"(\d+)"/g;
         const matches = [...html.matchAll(regex)];
         
         // הוצאת המספרים בלבד והסרת כפילויות
         const productIds = [...new Set(matches.map(match => match[1]))];
 
-        return productIds;
+        console.log('[getIdsByImage] Found', productIds.length, 'product IDs');
+
+        // If no products found, include debug info
+        if (productIds.length === 0) {
+            // Check for captcha or challenge page
+            const hasCaptcha = html.includes('captcha') || html.includes('verify') || html.includes('challenge');
+            const isEmpty = html.length < 500;
+            
+            return {
+                productIds: [],
+                debug: {
+                    htmlLength: html.length,
+                    hasCaptcha,
+                    isEmpty,
+                    imageUrl,
+                    hint: hasCaptcha ? 'AliExpress returned captcha/challenge page' : 
+                          isEmpty ? 'Empty response - image may not be accessible' : 
+                          'No products found for this image'
+                }
+            };
+        }
+
+        return { productIds, debug: null };
     } catch (error) {
-        console.error('Error fetching AliExpress image search:', error.message);
-        return [];
+        console.error('[getIdsByImage] Error fetching AliExpress image search:', error.message);
+        return { 
+            productIds: [], 
+            debug: { 
+                error: error.message, 
+                imageUrl,
+                hint: 'Network error or AliExpress blocked the request'
+            } 
+        };
     }
 }
 
