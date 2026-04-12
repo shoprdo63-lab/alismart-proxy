@@ -10,6 +10,35 @@ function applyCORS(res) {
   res.setHeader('Content-Type', 'application/json');
 }
 
+/**
+ * The Brain: Truncate query to 2-3 significant keywords for lean searching.
+ * Filters out stop words and short tokens (< 3 chars).
+ */
+function truncateQuery(rawQuery) {
+  if (!rawQuery || typeof rawQuery !== 'string') return '';
+  
+  const stopWords = new Set([
+    'the','a','an','and','or','but','in','on','at','to','for','of','with',
+    'by','from','is','are','was','were','be','been','being','have','has','had',
+    'do','does','did','will','would','could','should','may','might','must',
+    'can','shall','this','that','these','those','i','you','he','she','it',
+    'we','they','them','their','there','then','than','as','if','so','very',
+    'just','only','also','even','back','after','use','used','new','more',
+    'most','many','much','some','all','each','few','other','such','no','not'
+  ]);
+  
+  // Normalize: lowercase, remove punctuation, split
+  const words = rawQuery
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')  // Replace punctuation with space
+    .split(/\s+/)
+    .filter(w => w.length >= 3 && !stopWords.has(w));
+  
+  // Take first 2-3 significant keywords
+  const significant = words.slice(0, 3);
+  return significant.join(' ');
+}
+
 function enrichProducts(products) {
   return products.map(product => {
     const affiliateUrl = product.affiliateLink || product.productUrl || '';
@@ -108,6 +137,11 @@ module.exports = async function handler(req, res) {
     // Normalize image sentinel
     if (image === 'none') image = null;
 
+    // ── The Brain: Lean Query Processing ────────────────────────────────────────
+    const leanQuery = q ? truncateQuery(q) : '';
+    console.log('[API Search] Brain: Raw query:', q);
+    console.log('[API Search] Brain: Lean query:', leanQuery);
+
     // Validation: both q and image are missing
     if (!q && !image) {
       console.error('[API] Missing search criteria', req.query);
@@ -122,10 +156,10 @@ module.exports = async function handler(req, res) {
 
     // ── Waterfall Search ──────────────────────────────────────────────────────
 
-    // Step 1: Visual-First Search (if image exists)
+    // Attempt A: Visual Search (imgUrl + Lean q)
     if (image) {
-      console.log('[API Search] Step 1: Visual Search:', image);
-      const visualResults = await callAliExpressAPI({ image, keywords: q });
+      console.log('[API Search] Attempt A: Visual Search:', image, '+ keywords:', leanQuery);
+      const visualResults = await callAliExpressAPI({ image, keywords: leanQuery });
       if (visualResults && visualResults.length > 0) {
         console.log('[API Search] Step 1 succeeded with', visualResults.length, 'results');
         const enriched = enrichProducts(visualResults);
@@ -141,10 +175,10 @@ module.exports = async function handler(req, res) {
       console.log('[API Search] Step 1 returned 0 results, falling through to keyword search');
     }
 
-    // Step 2: Fallback to Keyword Search
-    if (q) {
-      console.log('[API Search] Step 2: Keyword Search:', q);
-      const keywordResults = await callAliExpressAPI({ keywords: q });
+    // Attempt B: Fallback to Keyword Search (Lean q only)
+    if (leanQuery) {
+      console.log('[API Search] Attempt B: Keyword Search:', leanQuery);
+      const keywordResults = await callAliExpressAPI({ keywords: leanQuery });
       if (keywordResults && keywordResults.length > 0) {
         console.log('[API Search] Step 2 succeeded with', keywordResults.length, 'results');
         const enriched = enrichProducts(keywordResults);
@@ -157,11 +191,11 @@ module.exports = async function handler(req, res) {
           message: 'Products found successfully'
         });
       }
-      console.log('[API Search] Step 2 returned 0 results, falling through to broad search');
+      console.log('[API Search] Attempt B returned 0 results, falling through to broad search');
 
-      // Step 3: Global Fallback — just the first word
-      const broadQuery = q.split(' ')[0];
-      console.log('[API Search] Step 3: Broad Search:', broadQuery);
+      // Attempt C: Global Fallback — just the first word of lean query
+      const broadQuery = leanQuery.split(' ')[0];
+      console.log('[API Search] Attempt C: Broad Search:', broadQuery);
       const broadResults = await callAliExpressAPI({ keywords: broadQuery });
       const enriched = enrichProducts(broadResults || []);
       return res.status(200).json({
