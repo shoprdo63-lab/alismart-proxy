@@ -54,36 +54,44 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    // Parameter extraction for image search
-    let { q, productId } = req.query;
-    const image = req.query.imageUrl || req.query.imgUrl;
+    // 1. Smart parameter extraction
+    let { q, productId, imageUrl, imgUrl } = req.query;
 
-    // Treat "Aliexpress" as empty to prevent useless searches
-    if (q === 'Aliexpress') {
+    // 2. Unify and clean image URL (critical!)
+    let image = imageUrl || imgUrl;
+    if (image) {
+      image = image.trim();
+      // Handle protocol-relative URLs
+      if (image.startsWith('//')) image = 'https:' + image;
+      // Remove size parameters that break search (e.g., _480x480.jpg_.avi)
+      image = image.split('?')[0]; // Remove query params
+      // Ensure proper extension
+      const hasValidExt = image.match(/\.(jpg|jpeg|png|webp)([^a-z]|$)/i);
+      if (!hasValidExt) {
+        image += '.jpg';
+      }
+    }
+
+    // 3. Handle "Aliexpress" or "undefined" as empty
+    if (q === 'Aliexpress' || q === 'undefined' || q === '') {
       q = null;
     }
 
-    // PRIORITY: Visual search (imgUrl) is stronger and more accurate
-    // If imgUrl exists, completely ignore both text query AND productId
-    // to avoid conflicting constraints that result in zero results.
-    // Visual search works best alone without any other parameters.
-    if (image) {
-      console.log('[API] Image search detected. Dropping text query and productId to avoid 0 results.');
-      q = null;
+    // 4. Visual Search Priority - avoid conflicts
+    if (image && image !== 'none') {
+      console.log('[API Search] Visual Search Mode Active:', image);
+      q = null; // Clear text to avoid conflicts
       productId = null;
     }
 
     // Validation: both q and image are missing
     if (!q && !image) {
-      console.error('[API] Missing parameters', req.query);
+      console.error('[API] Missing search criteria', req.query);
       applyCORS(res);
       return res.status(400).json({
         success: false,
-        status: 'error',
-        products: [],
-        data: [],
-        error: 'Missing required parameters',
-        message: "Please provide either 'q' for text search or 'imageUrl'/'imgUrl' for image search",
+        error: 'Missing search criteria',
+        message: 'Please provide q or imgUrl',
         received: req.query
       });
     }
