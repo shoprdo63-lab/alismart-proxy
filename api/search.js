@@ -21,7 +21,10 @@ function applyCORS(res) {
 }
 
 module.exports = async function handler(req, res) {
-  console.log('[API Search] Incoming request:', req.method, req.url, 'Query:', JSON.stringify(req.query));
+  // Log at very first line to debug what Vercel receives
+  console.log('[API] Incoming req.query:', JSON.stringify(req.query));
+  console.log('[API] Incoming req.url:', req.url);
+  console.log('[API] Incoming req.method:', req.method);
 
   applyCORS(res);
 
@@ -32,18 +35,22 @@ module.exports = async function handler(req, res) {
 
   // Only allow GET requests
   if (req.method !== 'GET') {
+    applyCORS(res);
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
   try {
-    const image = extractImageUrl(req.query);
+    // Permissive validation for debugging - accept q, imageUrl, or imgUrl
+    const { q, imageUrl, imgUrl } = req.query;
+    const image = imageUrl || imgUrl || q;
 
     if (!image) {
-      console.log('[API Search] Missing required parameters. Query:', JSON.stringify(req.query));
-      return res.status(400).json({
-        error: 'Missing Parameters',
-        received: req.query,
-        expected: ['q', 'imgUrl']
+      console.error('[API] Missing parameters', req.query);
+      applyCORS(res);
+      return res.status(200).json({
+        status: 'debug',
+        message: 'No query or image provided',
+        received: req.query
       });
     }
 
@@ -93,6 +100,7 @@ module.exports = async function handler(req, res) {
     });
   } catch (error) {
     console.error('[API Search] Error:', error.message);
+    applyCORS(res);
     return res.status(500).json({
       success: false,
       error: 'Failed to fetch products',
