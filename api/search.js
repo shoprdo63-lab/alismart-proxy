@@ -1,7 +1,7 @@
 const { getIdsByImage, getProductDetails, searchByKeywords, searchByProductId } = require('../services/aliexpress.js');
 
-// Affiliate ID constant from environment or default
 const AFFILIATE_ID = process.env.ALI_TRACKING_ID || 'ali_smart_finder_v1';
+const MAX_QUERY_LENGTH = 100; // AliExpress API limit safety
 
 function applyCORS(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -11,343 +11,203 @@ function applyCORS(res) {
 }
 
 /**
- * The Brain: Extract first N words from raw query for lean searching.
- * Simple split, no filtering - just first N words.
+ * Smart Truncation: Limit query length to prevent API errors.
  */
-function getFirstWords(rawQuery, n) {
-  if (!rawQuery || typeof rawQuery !== 'string') return '';
-  const words = rawQuery.trim().split(/\s+/).filter(w => w.length > 0);
-  return words.slice(0, n).join(' ');
+function smartTruncate(text, maxLength = MAX_QUERY_LENGTH) {
+  if (!text || typeof text !== 'string') return '';
+  const trimmed = text.trim();
+  if (trimmed.length <= maxLength) return trimmed;
+  // Truncate at last space before limit to avoid cutting words
+  const truncated = trimmed.substring(0, maxLength);
+  const lastSpace = truncated.lastIndexOf(' ');
+  return lastSpace > 0 ? truncated.substring(0, lastSpace) : truncated;
 }
 
 /**
- * Deep Search: Strip all adjectives from query, keeping only nouns and core product terms.
- * This helps find cheaper alternatives by removing descriptive words.
+ * Smart Clean: Strip common adjectives and marketing words from query.
  */
-function stripAdjectives(query) {
+function smartClean(query) {
   if (!query || typeof query !== 'string') return '';
   
-  // Common adjectives and descriptive words to remove
   const adjectives = [
-    // Quality descriptors
-    'best', 'premium', 'high', 'quality', 'original', 'genuine', 'authentic', 'official',
-    'luxury', 'deluxe', 'superior', 'excellent', 'amazing', 'awesome', 'fantastic',
-    'wonderful', 'perfect', 'beautiful', 'elegant', 'stylish', 'modern', 'new',
-    'latest', 'trendy', 'fashionable', 'popular', 'hot', 'top', 'best-selling',
-    // Size descriptors
-    'large', 'small', 'big', 'tiny', 'mini', 'huge', 'massive', 'compact',
-    'portable', 'lightweight', 'heavy', 'slim', 'thin', 'thick', 'wide', 'narrow',
-    // Color/appearance (standalone words, not when part of product name)
-    'colorful', 'bright', 'dark', 'light', 'shiny', 'matte', 'glossy', 'smooth',
-    // Condition descriptors
-    'brand', 'new', 'used', 'refurbished', 'vintage', 'classic', 'retro',
-    // Generic intensifiers
-    'very', 'really', 'super', 'ultra', 'mega', 'extra', 'pro', 'max', 'plus',
-    'advanced', 'enhanced', 'upgraded', 'improved', 'special', 'limited', 'exclusive'
+    'new', 'luxury', '2026', '2025', '2024', '2023', '2022', 'best', 'premium', 'high', 'quality',
+    'original', 'genuine', 'authentic', 'official', 'deluxe', 'superior', 'excellent',
+    'amazing', 'awesome', 'fantastic', 'wonderful', 'perfect', 'beautiful', 'elegant',
+    'stylish', 'modern', 'latest', 'trendy', 'fashionable', 'popular', 'hot', 'top',
+    'large', 'small', 'big', 'tiny', 'mini', 'huge', 'compact', 'portable',
+    'lightweight', 'heavy', 'slim', 'thin', 'wide', 'brand', 'used', 'refurbished',
+    'vintage', 'classic', 'retro', 'very', 'really', 'super', 'ultra', 'mega',
+    'extra', 'pro', 'max', 'plus', 'advanced', 'enhanced', 'upgraded', 'improved',
+    'special', 'limited', 'exclusive', 'sale', 'discount', 'cheap', 'free'
   ];
   
   const words = query.trim().toLowerCase().split(/\s+/).filter(w => w.length > 0);
-  const filteredWords = words.filter(word => !adjectives.includes(word) && word.length > 2);
+  const cleaned = words.filter(word => !adjectives.includes(word) && word.length > 2);
   
-  return filteredWords.join(' ') || words.slice(0, 3).join(' '); // Fallback to first 3 words
+  // If cleaning removed everything, fallback to first 3 words
+  return cleaned.join(' ') || words.slice(0, 3).join(' ');
 }
 
-function parsePrice(priceStr) {
-  if (!priceStr) return 0;
-  // Extract numeric value from price string (handles $, EUR, etc.)
-  const match = priceStr.toString().match(/[\d,]+\.?\d*/);
-  return match ? parseFloat(match[0].replace(/,/g, '')) : 0;
+/**
+ * Sanitize productId - remove non-numeric characters.
+ */
+function sanitizeProductId(id) {
+  if (!id || typeof id !== 'string') return null;
+  const cleaned = id.replace(/\D/g, ''); // Remove all non-digits
+  return cleaned.length > 0 ? cleaned : null;
 }
 
-function calculateTotalPrice(product) {
-  const price = parsePrice(product.price);
-  const shipping = parsePrice(product.shippingPrice || product.shipping || '0');
-  return price + shipping;
+/**
+ * Sanitize image URL - fix common issues.
+ */
+function sanitizeImageUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  let cleaned = url.trim();
+  
+  // Reject data URIs and blob URLs
+  if (cleaned.startsWith('data:') || cleaned.startsWith('blob:')) return null;
+  
+  // Handle protocol-relative URLs
+  if (cleaned.startsWith('//')) cleaned = 'https:' + cleaned;
+  
+  // Remove query params that often break image search
+  cleaned = cleaned.split('?')[0];
+  
+  // Ensure valid image extension
+  const hasValidExt = /\.(jpg|jpeg|png|webp|gif|bmp)([^a-z]|$)/i.test(cleaned);
+  if (!hasValidExt) {
+    // Try to fix common AliExpress image patterns
+    if (cleaned.includes('aliexpress')) {
+      cleaned = cleaned.replace(/_\d+x\d+\.jpg_.*$/, '.jpg');
+    }
+  }
+  
+  return cleaned;
 }
 
-function enrichProducts(products, referencePrice = null) {
+function enrichProducts(products) {
+  if (!Array.isArray(products)) return [];
+  
   return products.map(product => {
     const affiliateUrl = product.affiliateLink || product.productUrl || '';
     const finalUrl = affiliateUrl.includes('?')
       ? `${affiliateUrl}&aff_id=${AFFILIATE_ID}`
       : `${affiliateUrl}?aff_id=${AFFILIATE_ID}`;
     
-    // Safety check: ensure imgUrl has protocol
     let imgUrl = product.productImage || product.imageUrl || '';
-    if (imgUrl.startsWith('//')) {
-      imgUrl = 'https:' + imgUrl;
-    }
-    
-    // Calculate total price (price + shipping)
-    const totalPrice = calculateTotalPrice(product);
-    const priceValue = parsePrice(product.price);
-    const shippingValue = totalPrice - priceValue;
+    if (imgUrl.startsWith('//')) imgUrl = 'https:' + imgUrl;
     
     return {
-      title: product.title || '',
-      price: product.price || '',
-      shippingPrice: shippingValue > 0 ? `$${shippingValue.toFixed(2)}` : '',
-      totalPrice: totalPrice > 0 ? `$${totalPrice.toFixed(2)}` : product.price || '',
-      totalPriceValue: totalPrice, // Numeric for sorting
-      imgUrl: imgUrl,  // MUST be imgUrl (not imageUrl or productImage)
-      productUrl: finalUrl,
+      title: String(product.title || '').substring(0, 200),
+      price: String(product.price || ''),
+      imgUrl: String(imgUrl || ''),
+      productUrl: String(finalUrl || ''),
       rating: product.rating || null,
-      productId: product.productId || ''
+      productId: String(product.productId || '')
     };
   });
 }
 
-/**
- * Check if first 5 results are all above the reference price.
- * Returns true if deep search should be triggered.
- */
-function shouldTriggerDeepSearch(results, referencePrice) {
-  if (!referencePrice || results.length === 0) return false;
-  
-  const refPrice = parsePrice(referencePrice);
-  if (refPrice <= 0) return false;
-  
-  const firstFive = results.slice(0, 5);
-  if (firstFive.length < 3) return false; // Need at least some results to compare
-  
-  const allAboveReference = firstFive.every(product => {
-    const totalPrice = parsePrice(product.totalPrice || product.price);
-    return totalPrice >= refPrice * 0.95; // 5% tolerance for floating point / currency differences
-  });
-  
-  return allAboveReference;
-}
-
-async function callAliExpressAPI({ productId, image, keywords }) {
-  // Primary: Product ID search (most direct match)
-  if (productId) {
-    console.log('[callAliExpressAPI] Primary: Searching by productId:', productId);
-    const results = await searchByProductId(productId);
-    if (results && results.length > 0) {
-      console.log('[callAliExpressAPI] ProductId search found', results.length, 'results');
-      return results;
-    }
-    console.log('[callAliExpressAPI] ProductId search returned no results, continuing...');
-  }
-  
-  // Fallback: Image search
-  if (image) {
-    const imageSearchResult = await getIdsByImage(image);
-    const productIds = imageSearchResult.productIds || [];
-    const searchDebug = imageSearchResult.debug;
-    if (searchDebug) {
-      console.log('[callAliExpressAPI] Visual search debug:', JSON.stringify(searchDebug));
-    }
-    if (productIds.length === 0) return [];
-    return await getProductDetails(productIds);
-  }
-  
-  // Fallback: Keywords search
-  if (keywords) {
-    return await searchByKeywords(keywords);
-  }
-  return [];
-}
-
 module.exports = async function handler(req, res) {
-  // Deploy timestamp: 2026-04-12-waterfall
-  console.log('[API] Incoming req.query:', JSON.stringify(req.query));
-  console.log('[API] Incoming req.url:', req.url);
-  console.log('[API] Incoming req.method:', req.method);
-
+  // Always set CORS first
   applyCORS(res);
 
-  // Handle OPTIONS preflight request
+  // Handle OPTIONS preflight - return empty success
   if (req.method === 'OPTIONS') {
-    applyCORS(res);
-    return res.status(200).json({
-      success: true,
-      status: 'success',
-      products: [],
-      data: [],
-      count: 0,
-      message: 'OK'
-    });
+    return res.status(200).json({ success: true, products: [], count: 0 });
   }
 
-  // Only allow GET requests
+  // Reject non-GET with empty success (never crash the extension)
   if (req.method !== 'GET') {
-    applyCORS(res);
-    return res.status(405).json({
-      success: false,
-      status: 'error',
-      message: 'Method not allowed',
-      error: 'Only GET requests are supported'
-    });
+    return res.status(200).json({ success: true, products: [], count: 0 });
   }
 
   try {
-    // 1. Smart parameter extraction
-    let { q, productId, imageUrl, imgUrl, originalPrice } = req.query;
+    // Safely extract parameters with defaults
+    const q = req.query?.q || req.query?.query || '';
+    const rawProductId = req.query?.productId || '';
+    const rawImgUrl = req.query?.imgUrl || req.query?.imageUrl || '';
 
-    // 2. Unify and clean image URL (critical!)
-    let image = imageUrl || imgUrl;
-    if (image) {
-      image = image.trim();
-      // Handle protocol-relative URLs
-      if (image.startsWith('//')) image = 'https:' + image;
-      // Remove size parameters that break search (e.g., _480x480.jpg_.avi)
-      image = image.split('?')[0]; // Remove query params
-      // Ensure proper extension
-      const hasValidExt = image.match(/\.(jpg|jpeg|png|webp)([^a-z]|$)/i);
-      if (!hasValidExt) {
-        image += '.jpg';
-      }
-    }
+    // Sanitize inputs
+    const productId = sanitizeProductId(rawProductId);
+    const image = sanitizeImageUrl(rawImgUrl);
 
-    if (image) {
-      const googleLensUrl = `https://lens.google.com/uploadbyurl?url=${encodeURIComponent(image)}`;
-      console.log('[API Search] Google Lens URL prepared:', googleLensUrl);
-    }
+    console.log('[API] Inputs:', { 
+      productId: productId || 'none', 
+      hasImage: !!image, 
+      q: q ? 'present' : 'none' 
+    });
 
-    // 3. Handle "Aliexpress" or "undefined" as empty
-    if (q === 'Aliexpress' || q === 'undefined' || q === '') {
-      q = null;
-    }
+    let results = [];
 
-    // Normalize image sentinel
-    if (image === 'none') image = null;
-
-    // ── The Brain: 3-Word Clean ────────────────────────────────────────────────
-    const safeQuery3 = q ? getFirstWords(q, 3) : '';   // First 3 words only
-    console.log('[API Search] Brain: Raw query:', q);
-    console.log('[API Search] Brain: 3-word Safe Query:', safeQuery3);
-
-    // Validation: both q and image are missing
-    if (!q && !image) {
-      console.error('[API] Missing search criteria', req.query);
-      applyCORS(res);
-      return res.status(400).json({
-        success: false,
-        error: 'Missing search criteria',
-        message: 'Please provide q or imgUrl',
-        received: req.query
-      });
-    }
-
-    // Parse original product price for comparison (if provided)
-    const refPrice = originalPrice ? parsePrice(originalPrice) : 0;
-    console.log('[API Search] Original product price for comparison:', refPrice);
-
-    // ── 4-Step Waterfall Execution ─────────────────────────────────────────────
-    let finalResults = [];
-    let deepSearchTriggered = false;
-
-    // Step 0: Product ID search (PRIMARY - most direct and accurate)
+    // Priority 1: Product ID search (fetch Related Products)
     if (productId) {
-      console.log('[API Search] Step 0: Product ID search:', productId);
-      const step0Results = await callAliExpressAPI({ productId });
-      if (step0Results && step0Results.length >= 1) {
-        console.log('[API Search] Step 0 succeeded with', step0Results.length, 'results');
-        finalResults = step0Results;
-      } else {
-        console.log('[API Search] Step 0 returned', step0Results?.length || 0, 'results, continuing...');
+      try {
+        console.log('[API] Priority 1: ProductId search');
+        results = await searchByProductId(productId);
+        console.log('[API] ProductId result:', results.length, 'items');
+      } catch (e) {
+        console.log('[API] ProductId search failed:', e.message);
+        results = [];
       }
     }
 
-    // Step 1: imgUrl + 3 words (if no productId or Step 0 returned < 1 result)
-    if (finalResults.length === 0 && image && safeQuery3) {
-      console.log('[API Search] Step 1: img + 3 words:', safeQuery3);
-      const step1Results = await callAliExpressAPI({ image, keywords: safeQuery3 });
-      if (step1Results && step1Results.length >= 3) {
-        console.log('[API Search] Step 1 succeeded with', step1Results.length, 'results (>=3)');
-        finalResults = step1Results;
-      } else {
-        console.log('[API Search] Step 1 returned', step1Results?.length || 0, 'results (<3), continuing...');
-      }
-    }
-
-    // Step 2: imgUrl only (if Step 1 returned < 3 results)
-    if (finalResults.length === 0 && image) {
-      console.log('[API Search] Step 2: img only');
-      const step2Results = await callAliExpressAPI({ image, keywords: null });
-      if (step2Results && step2Results.length >= 3) {
-        console.log('[API Search] Step 2 succeeded with', step2Results.length, 'results (>=3)');
-        finalResults = step2Results;
-      } else {
-        console.log('[API Search] Step 2 returned', step2Results?.length || 0, 'results (<3), continuing...');
-      }
-    }
-
-    // Step 3: 3 words only (if image steps returned < 3 results or no image)
-    if (finalResults.length === 0 && safeQuery3) {
-      console.log('[API Search] Step 3: 3 words only:', safeQuery3);
-      const step3Results = await callAliExpressAPI({ keywords: safeQuery3 });
-      if (step3Results && step3Results.length > 0) {
-        console.log('[API Search] Step 3 succeeded with', step3Results.length, 'results');
-        finalResults = step3Results;
-      }
-    }
-
-    // Result Aggregation: Sort by total price (cheapest first) and enrich
-    if (finalResults.length > 0) {
-      // Parse total price for sorting (includes shipping)
-      finalResults.sort((a, b) => {
-        const totalA = calculateTotalPrice(a);
-        const totalB = calculateTotalPrice(b);
-        return totalA - totalB;
-      });
-      
-      // Check if deep search should be triggered (first 5 results above original price)
-      if (refPrice > 0 && shouldTriggerDeepSearch(finalResults, originalPrice) && safeQuery3) {
-        console.log('[API Search] Deep Search Triggered: First 5 results above original price (' + originalPrice + ')');
-        deepSearchTriggered = true;
-        
-        const strippedQuery = stripAdjectives(q || '');
-        if (strippedQuery && strippedQuery !== safeQuery3) {
-          console.log('[API Search] Deep Search: Stripped query from "' + safeQuery3 + '" to "' + strippedQuery + '"');
-          const deepResults = await callAliExpressAPI({ keywords: strippedQuery });
-          
-          if (deepResults && deepResults.length > 0) {
-            // Merge and re-sort results (keep unique by productId)
-            const existingIds = new Set(finalResults.map(p => p.productId));
-            const newDeepResults = deepResults.filter(p => !existingIds.has(p.productId));
-            
-            if (newDeepResults.length > 0) {
-              console.log('[API Search] Deep Search found', newDeepResults.length, 'new products');
-              finalResults = [...finalResults, ...newDeepResults];
-              // Re-sort after merging
-              finalResults.sort((a, b) => calculateTotalPrice(a) - calculateTotalPrice(b));
-            }
-          }
+    // Priority 2: Visual search with imgUrl (if no results)
+    if (results.length === 0 && image) {
+      try {
+        console.log('[API] Priority 2: Visual search');
+        const imageResult = await getIdsByImage(image);
+        if (imageResult?.productIds?.length > 0) {
+          results = await getProductDetails(imageResult.productIds);
         }
+        console.log('[API] Visual result:', results.length, 'items');
+      } catch (e) {
+        console.log('[API] Visual search failed:', e.message);
+        results = [];
       }
-      
-      const enriched = enrichProducts(finalResults, originalPrice);
-      return res.status(200).json({
-        success: true,
-        status: 'success',
-        products: enriched,
-        data: enriched,
-        count: enriched.length,
-        deepSearchTriggered,
-        message: 'Products found successfully'
-      });
     }
 
-    // No results from any step
+    // Priority 3: Keyword search with Smart Clean + Smart Truncate
+    if (results.length === 0 && q) {
+      try {
+        console.log('[API] Priority 3: Keyword search');
+        
+        // Step 1: Clean the query
+        const cleanedQuery = smartClean(q);
+        console.log('[API] Smart Clean:', q.substring(0, 50), '->', cleanedQuery.substring(0, 50));
+        
+        // Step 2: Truncate to safe length
+        const safeQuery = smartTruncate(cleanedQuery || q);
+        
+        if (safeQuery) {
+          results = await searchByKeywords(safeQuery);
+        }
+        console.log('[API] Keyword result:', results.length, 'items');
+      } catch (e) {
+        console.log('[API] Keyword search failed:', e.message);
+        results = [];
+      }
+    }
+
+    // Return enriched results
+    const enriched = enrichProducts(results);
+    
     return res.status(200).json({
       success: true,
-      status: 'success',
-      products: [],
-      data: [],
-      count: 0,
-      message: 'No products found'
+      products: enriched,
+      data: enriched,
+      count: enriched.length
     });
 
   } catch (error) {
-    console.error('[API Search] Error:', error.message);
-    applyCORS(res);
-    return res.status(500).json({
-      success: false,
-      status: 'error',
-      message: error.message,
-      error: 'Failed to fetch products'
+    // Bulletproof: Never crash the extension
+    console.error('[API] Critical error:', error?.message || 'Unknown error');
+    return res.status(200).json({
+      success: true,
+      products: [],
+      data: [],
+      count: 0,
+      error: 'Search failed silently'
     });
   }
-}
+};
