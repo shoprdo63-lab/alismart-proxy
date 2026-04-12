@@ -1,4 +1,4 @@
-import { getIdsByImage } from '../services/aliexpress.js';
+import { getIdsByImage, getProductDetails } from '../services/aliexpress.js';
 
 export default async function handler(req, res) {
   // CORS headers to allow requests from chrome extension
@@ -31,16 +31,30 @@ export default async function handler(req, res) {
 
     console.log('[API Search] Found', productIds.length, 'product IDs');
 
+    if (productIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        products: [],
+        count: 0
+      });
+    }
+
+    // Fetch product details for the found product IDs
+    console.log('[API Search] Fetching product details');
+    const products = await getProductDetails(productIds);
+
+    console.log('[API Search] Returning', products.length, 'products with details');
+
     return res.status(200).json({
       success: true,
-      productIds,
-      count: productIds.length
+      products,
+      count: products.length
     });
   } catch (error) {
     console.error('[API Search] Error:', error.message);
     return res.status(500).json({
       success: false,
-      error: 'Failed to fetch product IDs',
+      error: 'Failed to fetch products',
       message: error.message
     });
   }
