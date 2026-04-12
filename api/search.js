@@ -26,10 +26,17 @@ function enrichProducts(products) {
     const finalUrl = affiliateUrl.includes('?')
       ? `${affiliateUrl}&aff_id=${AFFILIATE_ID}`
       : `${affiliateUrl}?aff_id=${AFFILIATE_ID}`;
+    
+    // Safety check: ensure imgUrl has protocol
+    let imgUrl = product.productImage || product.imageUrl || '';
+    if (imgUrl.startsWith('//')) {
+      imgUrl = 'https:' + imgUrl;
+    }
+    
     return {
       title: product.title || '',
       price: product.price || '',
-      imageUrl: product.productImage || product.imageUrl || '',
+      imgUrl: imgUrl,  // MUST be imgUrl (not imageUrl or productImage)
       productUrl: finalUrl,
       rating: product.rating || null,
       productId: product.productId || ''
@@ -118,12 +125,10 @@ module.exports = async function handler(req, res) {
     // Normalize image sentinel
     if (image === 'none') image = null;
 
-    // ── The Brain: Lean Query Processing ────────────────────────────────────────
-    const hint2 = q ? getFirstWords(q, 2) : '';      // First 2 words for visual hint
-    const fallback3 = q ? getFirstWords(q, 3) : '';  // First 3 words for text fallback
+    // ── The Brain: 3-Word Clean ────────────────────────────────────────────────
+    const safeQuery3 = q ? getFirstWords(q, 3) : '';   // First 3 words only
     console.log('[API Search] Brain: Raw query:', q);
-    console.log('[API Search] Brain: 2-word hint:', hint2);
-    console.log('[API Search] Brain: 3-word fallback:', fallback3);
+    console.log('[API Search] Brain: 3-word Safe Query:', safeQuery3);
 
     // Validation: both q and image are missing
     if (!q && !image) {
@@ -137,40 +142,40 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // ── 3-Step Waterfall Search ───────────────────────────────────────────────
+    // ── 3-Step Waterfall Execution ─────────────────────────────────────────────
     let finalResults = [];
 
-    // Step 1 (Hybrid): imgUrl + first 2 words
-    if (image && hint2) {
-      console.log('[API Search] Step 1 (Hybrid): img + 2-word hint:', hint2);
-      const hybridResults = await callAliExpressAPI({ image, keywords: hint2 });
-      if (hybridResults && hybridResults.length >= 5) {
-        console.log('[API Search] Step 1 succeeded with', hybridResults.length, 'results (>=5)');
-        finalResults = hybridResults;
+    // Step 1: imgUrl + 3 words
+    if (image && safeQuery3) {
+      console.log('[API Search] Step 1: img + 3 words:', safeQuery3);
+      const step1Results = await callAliExpressAPI({ image, keywords: safeQuery3 });
+      if (step1Results && step1Results.length >= 3) {
+        console.log('[API Search] Step 1 succeeded with', step1Results.length, 'results (>=3)');
+        finalResults = step1Results;
       } else {
-        console.log('[API Search] Step 1 returned', hybridResults?.length || 0, 'results (<5), continuing...');
+        console.log('[API Search] Step 1 returned', step1Results?.length || 0, 'results (<3), continuing...');
       }
     }
 
-    // Step 2 (Visual Only): imgUrl only — if Step 1 failed or returned <5
+    // Step 2: imgUrl only (if Step 1 returned < 3 results)
     if (finalResults.length === 0 && image) {
-      console.log('[API Search] Step 2 (Visual Only): img only');
-      const visualResults = await callAliExpressAPI({ image, keywords: null });
-      if (visualResults && visualResults.length > 0) {
-        console.log('[API Search] Step 2 succeeded with', visualResults.length, 'results');
-        finalResults = visualResults;
+      console.log('[API Search] Step 2: img only');
+      const step2Results = await callAliExpressAPI({ image, keywords: null });
+      if (step2Results && step2Results.length >= 3) {
+        console.log('[API Search] Step 2 succeeded with', step2Results.length, 'results (>=3)');
+        finalResults = step2Results;
       } else {
-        console.log('[API Search] Step 2 returned 0 results, continuing...');
+        console.log('[API Search] Step 2 returned', step2Results?.length || 0, 'results (<3), continuing...');
       }
     }
 
-    // Step 3 (Text Fallback): first 3 words — if image steps failed or no image
-    if (finalResults.length === 0 && fallback3) {
-      console.log('[API Search] Step 3 (Text Fallback): 3-word query:', fallback3);
-      const textResults = await callAliExpressAPI({ keywords: fallback3 });
-      if (textResults && textResults.length > 0) {
-        console.log('[API Search] Step 3 succeeded with', textResults.length, 'results');
-        finalResults = textResults;
+    // Step 3: 3 words only (if image steps returned < 3 results or no image)
+    if (finalResults.length === 0 && safeQuery3) {
+      console.log('[API Search] Step 3: 3 words only:', safeQuery3);
+      const step3Results = await callAliExpressAPI({ keywords: safeQuery3 });
+      if (step3Results && step3Results.length > 0) {
+        console.log('[API Search] Step 3 succeeded with', step3Results.length, 'results');
+        finalResults = step3Results;
       }
     }
 
