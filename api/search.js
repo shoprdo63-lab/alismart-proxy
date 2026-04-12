@@ -1,11 +1,26 @@
 const { getIdsByImage, getProductDetails } = require('../services/aliexpress.js');
 
-module.exports = async function handler(req, res) {
-  // CORS headers to allow requests from chrome extension
+function extractImageUrl(query) {
+  const raw = query.imgUrl || query.imageUrl || query.img || null;
+  if (!raw) return null;
+  let url = raw.trim();
+  if (url.startsWith('//')) {
+    url = 'https:' + url;
+  }
+  return url;
+}
+
+function applyCORS(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Content-Type', 'application/json');
+}
+
+module.exports = async function handler(req, res) {
+  console.log('[API Search] Incoming request:', req.method, req.url, 'Query:', JSON.stringify(req.query));
+
+  applyCORS(res);
 
   // Handle OPTIONS preflight request
   if (req.method === 'OPTIONS') {
@@ -18,14 +33,14 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const image = req.query.imageUrl || req.query.imgUrl;
+    const image = extractImageUrl(req.query);
 
     if (!image) {
-      console.log('[API Search] Missing required parameters. Query params:', req.query);
-      return res.status(400).json({ 
-        error: 'imageUrl or imgUrl query parameter is required',
-        receivedParams: Object.keys(req.query),
-        hint: 'Please provide either ?imageUrl=... or ?imgUrl=... in your request'
+      console.log('[API Search] Missing required parameters. Query:', JSON.stringify(req.query));
+      return res.status(400).json({
+        error: 'Missing Parameters',
+        received: req.query,
+        expected: ['q', 'imgUrl']
       });
     }
 
