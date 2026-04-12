@@ -21,6 +21,7 @@ function applyCORS(res) {
 }
 
 module.exports = async function handler(req, res) {
+  // Deploy timestamp: 2026-04-12-14-18
   // Log at very first line to debug what Vercel receives
   console.log('[API] Incoming req.query:', JSON.stringify(req.query));
   console.log('[API] Incoming req.url:', req.url);
