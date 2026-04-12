@@ -35,52 +35,72 @@ function detectCategory(text) {
 
 /**
  * Smart Clean: Strip adjectives and structure words, keep only product essence.
- * "3 in 1 Chess Board Folding Wooden Portable..." → "Chess Board Wooden"
+ * "32Pcs Set Wooden Table Chess..." → "Wooden Chess"
  */
 function smartClean(query) {
   if (!query || typeof query !== 'string') return '';
-  
-  // Words to remove: adjectives + structure words
+
+  let cleaned = query.toLowerCase();
+
+  // STEP 1: Remove quantity patterns (e.g., "32pcs", "30pcs", "100pcs")
+  cleaned = cleaned.replace(/\b\d+\s*(pcs|pc|pieces|piece|units|unit|items|item|packs|pack|sets|set)\b/gi, ' ');
+
+  // STEP 2: Remove standalone numbers
+  cleaned = cleaned.replace(/\b\d+\b/g, ' ');
+
+  // STEP 3: Remove "X in 1" patterns
+  cleaned = cleaned.replace(/\b\d+\s*in\s*\d+\b/gi, ' ');
+
+  // STEP 4: Words to remove - adjectives + structure words
   const noiseWords = [
-    // Adjectives
-    'new', 'luxury', '2026', '2025', '2024', '2023', '2022', 'best', 'premium', 'high', 'quality',
+    // Adjectives - marketing fluff
+    'new', 'luxury', 'premium', 'high', 'quality', 'best', 'top',
     'original', 'genuine', 'authentic', 'official', 'deluxe', 'superior', 'excellent',
     'amazing', 'awesome', 'fantastic', 'wonderful', 'perfect', 'beautiful', 'elegant',
-    'stylish', 'modern', 'latest', 'trendy', 'fashionable', 'popular', 'hot', 'top',
+    'stylish', 'modern', 'latest', 'trendy', 'fashionable', 'popular', 'hot',
     'professional', 'pro', 'max', 'plus', 'advanced', 'enhanced', 'upgraded', 'improved',
-    'special', 'limited', 'exclusive', 'sale', 'discount', 'cheap', 'free', 'hot sale',
+    'special', 'limited', 'exclusive', 'sale', 'discount', 'cheap', 'free',
     'large', 'small', 'big', 'tiny', 'mini', 'huge', 'compact', 'slim', 'thin', 'wide',
     'brand', 'used', 'refurbished', 'vintage', 'classic', 'retro',
-    'very', 'really', 'super', 'ultra', 'mega', 'extra',
+    'very', 'really', 'super', 'ultra', 'mega', 'extra', 'highly',
+    // Years
+    '2026', '2025', '2024', '2023', '2022', '2021', '2020',
+    // E-commerce / shipping terms
+    'shipping', 'fast', 'quick', 'express', 'delivery', 'worldwide', 'international',
+    'wholesale', 'retail', 'bulk', 'dropshipping', 'dropship',
     // Structure/Function words
     'portable', 'folding', 'foldable', 'set', 'kit', 'pack', 'bundle', 'collection',
-    '3 in 1', '2 in 1', '4 in 1', '5 in 1', 'multi', 'all in one',
+    'multi', 'multifunction', 'multifunctional', 'all in one', 'all-in-one',
+    'reusable', 'washable', 'disposable', 'durable', 'practical', 'convenient',
+    'perfect', 'ideal', 'suitable', 'compatible', 'adjustable', 'removable',
+    // Audience descriptors
     'for adults', 'for kids', 'for children', 'for women', 'for men', 'unisex',
-    'with', 'and', 'or', 'the', 'a', 'an', 'in', 'on', 'at', 'to', 'of'
+    'adults', 'kids', 'children', 'women', 'men', 'boys', 'girls',
+    // Articles and prepositions
+    'with', 'and', 'or', 'the', 'a', 'an', 'in', 'on', 'at', 'to', 'of', 'for',
+    'from', 'by', 'into', 'onto', 'upon'
   ];
-  
-  let cleaned = query.toLowerCase();
-  
+
   // Remove noise words
   for (const word of noiseWords) {
     cleaned = cleaned.replace(new RegExp(`\\b${word}\\b`, 'gi'), ' ');
   }
-  
-  // Remove numbers standing alone (like "3" in "3 in 1")
-  cleaned = cleaned.replace(/\b\d+\b/g, ' ');
-  
+
+  // STEP 5: Remove common table/furniture structure words when paired with product
+  cleaned = cleaned.replace(/\btable\s+(game|board|top|chess)\b/gi, '$1');
+
   // Clean up multiple spaces and trim
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
-  
+
   // Get meaningful words (3+ chars)
   const words = cleaned.split(' ').filter(w => w.length >= 3);
-  
+
   // If too few words, fallback to original first 3 meaningful words
   if (words.length < 2) {
     const originalWords = query.toLowerCase().split(/\s+/).filter(w => w.length >= 3);
     return originalWords.slice(0, 3).join(' ');
   }
-  
+
   return words.join(' ');
 }
 
@@ -111,6 +131,15 @@ function sanitizeImageUrl(url) {
 }
 
 /**
+ * Extract numeric price from price string
+ */
+function extractPrice(priceStr) {
+  if (!priceStr) return 0;
+  const match = String(priceStr).match(/[\d,]+\.?\d*/);
+  return match ? parseFloat(match[0].replace(/,/g, '')) : 0;
+}
+
+/**
  * Filter products by category - remove mismatched categories
  */
 function filterByCategory(products, sourceCategory) {
@@ -121,6 +150,26 @@ function filterByCategory(products, sourceCategory) {
     // Keep if no category detected or matches source
     if (!productCategory) return true;
     return productCategory === sourceCategory;
+  });
+}
+
+/**
+ * Filter products by price - remove suspiciously cheap items (likely spare parts)
+ * If original is $50, filter out items under $20 (less than 40% of original)
+ */
+function filterByPrice(products, originalPriceStr) {
+  if (!Array.isArray(products) || products.length === 0) return products;
+  
+  const originalPrice = extractPrice(originalPriceStr);
+  if (originalPrice <= 0) return products;
+  
+  const minPrice = originalPrice * 0.4; // Minimum 40% of original price
+  
+  return products.filter(product => {
+    const productPrice = extractPrice(product.price);
+    // Keep if price is reasonable (>= 40% of original) or if we can't parse price
+    if (productPrice <= 0) return true;
+    return productPrice >= minPrice;
   });
 }
 
@@ -173,18 +222,21 @@ module.exports = async function handler(req, res) {
     const searchMode = req.query?.searchMode || 'exact'; // 'exact' or 'visual'
     const rawProductId = req.query?.productId || '';
     const rawImgUrl = req.query?.imgUrl || req.query?.imageUrl || '';
+    const originalPrice = req.query?.originalPrice || req.query?.price || '';
 
     // Sanitize
     const productId = sanitizeProductId(rawProductId);
     const image = sanitizeImageUrl(rawImgUrl);
     const sourceCategory = detectCategory(q);
 
-    console.log('[API] Mode:', searchMode, '| Category:', sourceCategory, '| PID:', productId || 'none', '| Img:', !!image);
+    console.log('[API] Mode:', searchMode, '| Category:', sourceCategory, '| PID:', productId || 'none', '| Img:', !!image, '| OrigPrice:', originalPrice || 'none');
 
     let results = [];
 
     // =====================================================
-    // MODE: EXACT (find same product from other sellers)
+    // MODE: EXACT - Find the same product from other sellers
+    // Priority 1: Search by productId (most accurate)
+    // Priority 2: Fallback to cleaned text search (removes "Luxury", "New", "Shipping", etc.)
     // =====================================================
     if (searchMode === 'exact') {
       // Priority 1: Product ID search
@@ -198,7 +250,7 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // Priority 2: Cleaned text search
+      // Priority 2: Cleaned text search (strip marketing noise)
       if (results.length === 0 && q) {
         try {
           console.log('[API] EXACT Priority 2: Cleaned text search');
@@ -216,13 +268,15 @@ module.exports = async function handler(req, res) {
     }
 
     // =====================================================
-    // MODE: VISUAL (find visually similar products)
+    // MODE: VISUAL - Find visually similar products by image ONLY
+    // Sends ONLY imgUrl to AliExpress, completely ignores title/text
+    // This prevents unrelated results (furniture, makeup) caused by title noise
     // =====================================================
     else if (searchMode === 'visual') {
-      // Priority 1: Visual search ONLY (ignores title)
+      // Visual search ONLY - send image URL to AliExpress, ignore all text
       if (image) {
         try {
-          console.log('[API] VISUAL Priority 1: Visual search');
+          console.log('[API] VISUAL: Image-only search (ignoring title)');
           const imageResult = await getIdsByImage(image);
           if (imageResult?.productIds?.length > 0) {
             results = await getProductDetails(imageResult.productIds);
@@ -243,6 +297,13 @@ module.exports = async function handler(req, res) {
       const beforeFilter = results.length;
       results = filterByCategory(results, sourceCategory);
       console.log('[API] Category filter:', beforeFilter, '→', results.length, '(', sourceCategory, ')');
+    }
+    
+    // Price filtering - remove suspiciously cheap items (likely spare parts)
+    if (results.length > 0 && originalPrice) {
+      const beforePriceFilter = results.length;
+      results = filterByPrice(results, originalPrice);
+      console.log('[API] Price filter:', beforePriceFilter, '→', results.length, '(min 40% of', originalPrice, ')');
     }
 
     // Enrich and return
