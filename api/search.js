@@ -63,10 +63,12 @@ module.exports = async function handler(req, res) {
     }
 
     // PRIORITY: Visual search (imgUrl) is stronger and more accurate
-    // If imgUrl exists, completely ignore productId to avoid conflicting constraints
-    // that result in zero results. Visual search works best alone.
-    if (image && productId) {
-      console.log('[API Search] Prioritizing visual search. Ignoring productId:', productId);
+    // If imgUrl exists, completely ignore both text query AND productId
+    // to avoid conflicting constraints that result in zero results.
+    // Visual search works best alone without any other parameters.
+    if (image) {
+      console.log('[API] Image search detected. Dropping text query and productId to avoid 0 results.');
+      q = null;
       productId = null;
     }
 
