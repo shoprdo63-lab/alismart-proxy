@@ -169,4 +169,65 @@ async function getProductDetails(productIds) {
     }
 }
 
-module.exports = { getIdsByImage, getProductDetails };
+/**
+ * Search products by keyword using AliExpress Affiliate API
+ * @param {string} keywords - Search keywords
+ * @returns {Promise<Object[]>} Array of product details
+ */
+async function searchByKeywords(keywords) {
+    if (!keywords || !keywords.trim()) {
+        console.error('[searchByKeywords] No keywords provided');
+        return [];
+    }
+
+    const now = new Date();
+    const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+
+    const params = {
+        method: 'aliexpress.affiliate.product.query',
+        app_key: APP_KEY,
+        timestamp,
+        format: 'json',
+        v: '2.0',
+        sign_method: 'md5',
+        fields: 'product_id,product_title,product_main_image_url,product_detail_url,sale_price,original_price,promotion_link',
+        keywords: keywords.trim(),
+        page_no: 1,
+        page_size: 20,
+        tracking_id: TRACKING_ID
+    };
+
+    params.sign = generateSign(params);
+
+    const queryString = Object.entries(params)
+        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+        .join('&');
+
+    try {
+        console.log('[searchByKeywords] Searching for:', keywords);
+
+        const response = await axios.get(`${API_URL}?${queryString}`, {
+            headers: { 'Accept': 'application/json' },
+            timeout: 10000
+        });
+
+        const data = response.data;
+        const products = data?.aliexpress_affiliate_product_query_response?.resp_result?.result?.products?.product || [];
+
+        console.log('[searchByKeywords] Retrieved', products.length, 'products');
+
+        return products.map((item) => ({
+            title: item?.product_title || item?.title || '',
+            price: item?.sale_price || item?.price || '',
+            originalPrice: item?.original_price || '',
+            productImage: item?.product_main_image_url || item?.imageUrl || '',
+            affiliateLink: item?.promotion_link || item?.product_detail_url || '',
+            productId: item?.product_id || item?.id || ''
+        }));
+    } catch (error) {
+        console.error('[searchByKeywords] Error:', error.message);
+        return [];
+    }
+}
+
+module.exports = { getIdsByImage, getProductDetails, searchByKeywords };

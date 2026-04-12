@@ -1,17 +1,7 @@
-const { getIdsByImage, getProductDetails } = require('../services/aliexpress.js');
+const { getIdsByImage, getProductDetails, searchByKeywords } = require('../services/aliexpress.js');
 
 // Affiliate ID constant from environment or default
 const AFFILIATE_ID = process.env.ALI_TRACKING_ID || 'ali_smart_finder_v1';
-
-function extractImageUrl(query) {
-  const raw = query.imgUrl || query.imageUrl || query.img || null;
-  if (!raw) return null;
-  let url = raw.trim();
-  if (url.startsWith('//')) {
-    url = 'https:' + url;
-  }
-  return url;
-}
 
 function applyCORS(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -20,9 +10,42 @@ function applyCORS(res) {
   res.setHeader('Content-Type', 'application/json');
 }
 
+function enrichProducts(products) {
+  return products.map(product => {
+    const affiliateUrl = product.affiliateLink || product.productUrl || '';
+    const finalUrl = affiliateUrl.includes('?')
+      ? `${affiliateUrl}&aff_id=${AFFILIATE_ID}`
+      : `${affiliateUrl}?aff_id=${AFFILIATE_ID}`;
+    return {
+      title: product.title || '',
+      price: product.price || '',
+      imageUrl: product.productImage || product.imageUrl || '',
+      productUrl: finalUrl,
+      rating: product.rating || null,
+      productId: product.productId || ''
+    };
+  });
+}
+
+async function callAliExpressAPI({ image, keywords }) {
+  if (image) {
+    const imageSearchResult = await getIdsByImage(image);
+    const productIds = imageSearchResult.productIds || [];
+    const searchDebug = imageSearchResult.debug;
+    if (searchDebug) {
+      console.log('[callAliExpressAPI] Visual search debug:', JSON.stringify(searchDebug));
+    }
+    if (productIds.length === 0) return [];
+    return await getProductDetails(productIds);
+  }
+  if (keywords) {
+    return await searchByKeywords(keywords);
+  }
+  return [];
+}
+
 module.exports = async function handler(req, res) {
-  // Deploy timestamp: 2026-04-12-14-18
-  // Log at very first line to debug what Vercel receives
+  // Deploy timestamp: 2026-04-12-waterfall
   console.log('[API] Incoming req.query:', JSON.stringify(req.query));
   console.log('[API] Incoming req.url:', req.url);
   console.log('[API] Incoming req.method:', req.method);
@@ -72,17 +95,18 @@ module.exports = async function handler(req, res) {
       }
     }
 
+    if (image) {
+      const googleLensUrl = `https://lens.google.com/uploadbyurl?url=${encodeURIComponent(image)}`;
+      console.log('[API Search] Google Lens URL prepared:', googleLensUrl);
+    }
+
     // 3. Handle "Aliexpress" or "undefined" as empty
     if (q === 'Aliexpress' || q === 'undefined' || q === '') {
       q = null;
     }
 
-    // 4. Visual Search Priority - avoid conflicts
-    if (image && image !== 'none') {
-      console.log('[API Search] Visual Search Mode Active:', image);
-      q = null; // Clear text to avoid conflicts
-      productId = null;
-    }
+    // Normalize image sentinel
+    if (image === 'none') image = null;
 
     // Validation: both q and image are missing
     if (!q && !image) {
@@ -96,62 +120,70 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    console.log('[API Search] Fetching product IDs for image:', image);
+    // ── Waterfall Search ──────────────────────────────────────────────────────
 
-    // Call the service function to get product IDs
-    const imageSearchResult = await getIdsByImage(image);
-    const productIds = imageSearchResult.productIds || [];
-    const searchDebug = imageSearchResult.debug;
-
-    console.log('[API Search] Found', productIds.length, 'product IDs');
-    if (searchDebug) {
-      console.log('[API Search] Debug info:', JSON.stringify(searchDebug));
+    // Step 1: Visual-First Search (if image exists)
+    if (image) {
+      console.log('[API Search] Step 1: Visual Search:', image);
+      const visualResults = await callAliExpressAPI({ image, keywords: q });
+      if (visualResults && visualResults.length > 0) {
+        console.log('[API Search] Step 1 succeeded with', visualResults.length, 'results');
+        const enriched = enrichProducts(visualResults);
+        return res.status(200).json({
+          success: true,
+          status: 'success',
+          products: enriched,
+          data: enriched,
+          count: enriched.length,
+          message: 'Products found successfully'
+        });
+      }
+      console.log('[API Search] Step 1 returned 0 results, falling through to keyword search');
     }
 
-    if (productIds.length === 0) {
+    // Step 2: Fallback to Keyword Search
+    if (q) {
+      console.log('[API Search] Step 2: Keyword Search:', q);
+      const keywordResults = await callAliExpressAPI({ keywords: q });
+      if (keywordResults && keywordResults.length > 0) {
+        console.log('[API Search] Step 2 succeeded with', keywordResults.length, 'results');
+        const enriched = enrichProducts(keywordResults);
+        return res.status(200).json({
+          success: true,
+          status: 'success',
+          products: enriched,
+          data: enriched,
+          count: enriched.length,
+          message: 'Products found successfully'
+        });
+      }
+      console.log('[API Search] Step 2 returned 0 results, falling through to broad search');
+
+      // Step 3: Global Fallback — just the first word
+      const broadQuery = q.split(' ')[0];
+      console.log('[API Search] Step 3: Broad Search:', broadQuery);
+      const broadResults = await callAliExpressAPI({ keywords: broadQuery });
+      const enriched = enrichProducts(broadResults || []);
       return res.status(200).json({
         success: true,
         status: 'success',
-        products: [],
-        data: [],
-        count: 0,
-        message: searchDebug?.hint || 'No products found',
-        debug: process.env.NODE_ENV !== 'production' ? searchDebug : undefined
+        products: enriched,
+        data: enriched,
+        count: enriched.length,
+        message: enriched.length > 0 ? 'Products found successfully' : 'No products found'
       });
     }
 
-    // Fetch product details for the found product IDs
-    console.log('[API Search] Fetching product details');
-    const products = await getProductDetails(productIds);
-
-    console.log('[API Search] Returning', products.length, 'products with details');
-
-    // Enrich products with affiliate-ready URLs and standard field names
-    const enrichedProducts = products.map(product => {
-      const affiliateUrl = product.affiliateLink || product.productUrl || '';
-      // Ensure affiliate ID is in the URL
-      const finalUrl = affiliateUrl.includes('?') 
-        ? `${affiliateUrl}&aff_id=${AFFILIATE_ID}` 
-        : `${affiliateUrl}?aff_id=${AFFILIATE_ID}`;
-      
-      return {
-        title: product.title || '',
-        price: product.price || '',
-        imageUrl: product.productImage || product.imageUrl || '',
-        productUrl: finalUrl,
-        rating: product.rating || null,
-        productId: product.productId || ''
-      };
-    });
-
+    // Image was provided but all visual steps failed — no keyword to fall back on
     return res.status(200).json({
       success: true,
       status: 'success',
-      products: enrichedProducts,
-      data: enrichedProducts,
-      count: enrichedProducts.length,
-      message: 'Products found successfully'
+      products: [],
+      data: [],
+      count: 0,
+      message: 'No products found'
     });
+
   } catch (error) {
     console.error('[API Search] Error:', error.message);
     applyCORS(res);
