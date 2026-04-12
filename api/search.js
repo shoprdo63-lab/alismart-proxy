@@ -31,13 +31,25 @@ module.exports = async function handler(req, res) {
   // Handle OPTIONS preflight request
   if (req.method === 'OPTIONS') {
     applyCORS(res);
-    return res.status(200).end();
+    return res.status(200).json({
+      success: true,
+      status: 'success',
+      products: [],
+      data: [],
+      count: 0,
+      message: 'OK'
+    });
   }
 
   // Only allow GET requests
   if (req.method !== 'GET') {
     applyCORS(res);
-    return res.status(405).json({ error: 'Method not allowed' });
+    return res.status(405).json({
+      success: false,
+      status: 'error',
+      message: 'Method not allowed',
+      error: 'Only GET requests are supported'
+    });
   }
 
   try {
@@ -55,9 +67,13 @@ module.exports = async function handler(req, res) {
       console.error('[API] Missing parameters', req.query);
       applyCORS(res);
       return res.status(400).json({
+        success: false,
+        status: 'error',
+        products: [],
+        data: [],
         error: 'Missing required parameters',
-        received: req.query,
-        hint: "Please provide either 'q' for text search or 'imageUrl'/'imgUrl' for image search"
+        message: "Please provide either 'q' for text search or 'imageUrl'/'imgUrl' for image search",
+        received: req.query
       });
     }
 
@@ -74,7 +90,8 @@ module.exports = async function handler(req, res) {
         status: 'success',
         products: [],
         data: [],
-        message: 'No matches found'
+        count: 0,
+        message: 'No products found'
       });
     }
 
@@ -107,15 +124,17 @@ module.exports = async function handler(req, res) {
       status: 'success',
       products: enrichedProducts,
       data: enrichedProducts,
-      count: enrichedProducts.length
+      count: enrichedProducts.length,
+      message: 'Products found successfully'
     });
   } catch (error) {
     console.error('[API Search] Error:', error.message);
     applyCORS(res);
     return res.status(500).json({
       success: false,
-      error: 'Failed to fetch products',
-      message: error.message
+      status: 'error',
+      message: error.message,
+      error: 'Failed to fetch products'
     });
   }
 }
