@@ -11,32 +11,13 @@ function applyCORS(res) {
 }
 
 /**
- * The Brain: Truncate query to 2-3 significant keywords for lean searching.
- * Filters out stop words and short tokens (< 3 chars).
+ * The Brain: Extract first N words from raw query for lean searching.
+ * Simple split, no filtering - just first N words.
  */
-function truncateQuery(rawQuery) {
+function getFirstWords(rawQuery, n) {
   if (!rawQuery || typeof rawQuery !== 'string') return '';
-  
-  const stopWords = new Set([
-    'the','a','an','and','or','but','in','on','at','to','for','of','with',
-    'by','from','is','are','was','were','be','been','being','have','has','had',
-    'do','does','did','will','would','could','should','may','might','must',
-    'can','shall','this','that','these','those','i','you','he','she','it',
-    'we','they','them','their','there','then','than','as','if','so','very',
-    'just','only','also','even','back','after','use','used','new','more',
-    'most','many','much','some','all','each','few','other','such','no','not'
-  ]);
-  
-  // Normalize: lowercase, remove punctuation, split
-  const words = rawQuery
-    .toLowerCase()
-    .replace(/[^\w\s]/g, ' ')  // Replace punctuation with space
-    .split(/\s+/)
-    .filter(w => w.length >= 3 && !stopWords.has(w));
-  
-  // Take first 2-3 significant keywords
-  const significant = words.slice(0, 3);
-  return significant.join(' ');
+  const words = rawQuery.trim().split(/\s+/).filter(w => w.length > 0);
+  return words.slice(0, n).join(' ');
 }
 
 function enrichProducts(products) {
@@ -138,9 +119,11 @@ module.exports = async function handler(req, res) {
     if (image === 'none') image = null;
 
     // ── The Brain: Lean Query Processing ────────────────────────────────────────
-    const leanQuery = q ? truncateQuery(q) : '';
+    const hint2 = q ? getFirstWords(q, 2) : '';      // First 2 words for visual hint
+    const fallback3 = q ? getFirstWords(q, 3) : '';  // First 3 words for text fallback
     console.log('[API Search] Brain: Raw query:', q);
-    console.log('[API Search] Brain: Lean query:', leanQuery);
+    console.log('[API Search] Brain: 2-word hint:', hint2);
+    console.log('[API Search] Brain: 3-word fallback:', fallback3);
 
     // Validation: both q and image are missing
     if (!q && !image) {
@@ -154,61 +137,64 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // ── Waterfall Search ──────────────────────────────────────────────────────
+    // ── 3-Step Waterfall Search ───────────────────────────────────────────────
+    let finalResults = [];
 
-    // Attempt A: Visual Search (imgUrl + Lean q)
-    if (image) {
-      console.log('[API Search] Attempt A: Visual Search:', image, '+ keywords:', leanQuery);
-      const visualResults = await callAliExpressAPI({ image, keywords: leanQuery });
-      if (visualResults && visualResults.length > 0) {
-        console.log('[API Search] Step 1 succeeded with', visualResults.length, 'results');
-        const enriched = enrichProducts(visualResults);
-        return res.status(200).json({
-          success: true,
-          status: 'success',
-          products: enriched,
-          data: enriched,
-          count: enriched.length,
-          message: 'Products found successfully'
-        });
+    // Step 1 (Hybrid): imgUrl + first 2 words
+    if (image && hint2) {
+      console.log('[API Search] Step 1 (Hybrid): img + 2-word hint:', hint2);
+      const hybridResults = await callAliExpressAPI({ image, keywords: hint2 });
+      if (hybridResults && hybridResults.length >= 5) {
+        console.log('[API Search] Step 1 succeeded with', hybridResults.length, 'results (>=5)');
+        finalResults = hybridResults;
+      } else {
+        console.log('[API Search] Step 1 returned', hybridResults?.length || 0, 'results (<5), continuing...');
       }
-      console.log('[API Search] Step 1 returned 0 results, falling through to keyword search');
     }
 
-    // Attempt B: Fallback to Keyword Search (Lean q only)
-    if (leanQuery) {
-      console.log('[API Search] Attempt B: Keyword Search:', leanQuery);
-      const keywordResults = await callAliExpressAPI({ keywords: leanQuery });
-      if (keywordResults && keywordResults.length > 0) {
-        console.log('[API Search] Step 2 succeeded with', keywordResults.length, 'results');
-        const enriched = enrichProducts(keywordResults);
-        return res.status(200).json({
-          success: true,
-          status: 'success',
-          products: enriched,
-          data: enriched,
-          count: enriched.length,
-          message: 'Products found successfully'
-        });
+    // Step 2 (Visual Only): imgUrl only — if Step 1 failed or returned <5
+    if (finalResults.length === 0 && image) {
+      console.log('[API Search] Step 2 (Visual Only): img only');
+      const visualResults = await callAliExpressAPI({ image, keywords: null });
+      if (visualResults && visualResults.length > 0) {
+        console.log('[API Search] Step 2 succeeded with', visualResults.length, 'results');
+        finalResults = visualResults;
+      } else {
+        console.log('[API Search] Step 2 returned 0 results, continuing...');
       }
-      console.log('[API Search] Attempt B returned 0 results, falling through to broad search');
+    }
 
-      // Attempt C: Global Fallback — just the first word of lean query
-      const broadQuery = leanQuery.split(' ')[0];
-      console.log('[API Search] Attempt C: Broad Search:', broadQuery);
-      const broadResults = await callAliExpressAPI({ keywords: broadQuery });
-      const enriched = enrichProducts(broadResults || []);
+    // Step 3 (Text Fallback): first 3 words — if image steps failed or no image
+    if (finalResults.length === 0 && fallback3) {
+      console.log('[API Search] Step 3 (Text Fallback): 3-word query:', fallback3);
+      const textResults = await callAliExpressAPI({ keywords: fallback3 });
+      if (textResults && textResults.length > 0) {
+        console.log('[API Search] Step 3 succeeded with', textResults.length, 'results');
+        finalResults = textResults;
+      }
+    }
+
+    // Result Aggregation: Sort by price (cheapest first) and enrich
+    if (finalResults.length > 0) {
+      // Parse price for sorting (remove $, commas, take numeric value)
+      finalResults.sort((a, b) => {
+        const priceA = parseFloat(a.price?.replace(/[^0-9.]/g, '')) || 0;
+        const priceB = parseFloat(b.price?.replace(/[^0-9.]/g, '')) || 0;
+        return priceA - priceB;
+      });
+      
+      const enriched = enrichProducts(finalResults);
       return res.status(200).json({
         success: true,
         status: 'success',
         products: enriched,
         data: enriched,
         count: enriched.length,
-        message: enriched.length > 0 ? 'Products found successfully' : 'No products found'
+        message: 'Products found successfully'
       });
     }
 
-    // Image was provided but all visual steps failed — no keyword to fall back on
+    // No results from any step
     return res.status(200).json({
       success: true,
       status: 'success',
