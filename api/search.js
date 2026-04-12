@@ -15,8 +15,8 @@ function extractImageUrl(query) {
 
 function applyCORS(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('Content-Type', 'application/json');
 }
 
@@ -30,7 +30,8 @@ module.exports = async function handler(req, res) {
 
   // Handle OPTIONS preflight request
   if (req.method === 'OPTIONS') {
-    return res.status(204).end();
+    applyCORS(res);
+    return res.status(200).end();
   }
 
   // Only allow GET requests
@@ -40,17 +41,23 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    // Permissive validation for debugging - accept q, imageUrl, or imgUrl
-    const { q, imageUrl, imgUrl } = req.query;
-    const image = imageUrl || imgUrl || q;
+    // Parameter extraction for image search
+    let { q } = req.query;
+    const image = req.query.imageUrl || req.query.imgUrl;
 
-    if (!image) {
+    // Treat "Aliexpress" as empty to prevent useless searches
+    if (q === 'Aliexpress') {
+      q = null;
+    }
+
+    // Validation: both q and image are missing
+    if (!q && !image) {
       console.error('[API] Missing parameters', req.query);
       applyCORS(res);
-      return res.status(200).json({
-        status: 'debug',
-        message: 'No query or image provided',
-        received: req.query
+      return res.status(400).json({
+        error: 'Missing required parameters',
+        received: req.query,
+        hint: "Please provide either 'q' for text search or 'imageUrl'/'imgUrl' for image search"
       });
     }
 
@@ -63,8 +70,10 @@ module.exports = async function handler(req, res) {
 
     if (productIds.length === 0) {
       return res.status(200).json({
+        success: true,
         status: 'success',
         products: [],
+        data: [],
         message: 'No matches found'
       });
     }
@@ -94,8 +103,10 @@ module.exports = async function handler(req, res) {
     });
 
     return res.status(200).json({
+      success: true,
       status: 'success',
       products: enrichedProducts,
+      data: enrichedProducts,
       count: enrichedProducts.length
     });
   } catch (error) {
