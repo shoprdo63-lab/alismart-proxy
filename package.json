@@ -1,7 +1,6 @@
 {
   "name": "alismart-proxy",
   "version": "1.0.0",
-  "type": "module",
   "scripts": {},
   "dependencies": {
     "axios": "^1.15.0"

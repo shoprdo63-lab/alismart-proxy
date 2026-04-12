@@ -1,6 +1,6 @@
-import { getIdsByImage, getProductDetails } from '../services/aliexpress.js';
+const { getIdsByImage, getProductDetails } = require('../services/aliexpress.js');
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   // CORS headers to allow requests from chrome extension
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');

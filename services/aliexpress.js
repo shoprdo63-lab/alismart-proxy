@@ -1,5 +1,5 @@
-import axios from 'axios';
-import crypto from 'crypto';
+const axios = require('axios');
+const crypto = require('crypto');
 
 const APP_KEY = process.env.ALI_APP_KEY || '528438';
 const APP_SECRET = process.env.ALI_APP_SECRET || 'YPhzjbGESFs75SniEK0t1wwfKhvrKIhq';
@@ -113,4 +113,4 @@ async function getProductDetails(productIds) {
     }
 }
 
-export { getIdsByImage, getProductDetails };
+module.exports = { getIdsByImage, getProductDetails };
