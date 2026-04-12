@@ -1,5 +1,8 @@
 const { getIdsByImage, getProductDetails } = require('../services/aliexpress.js');
 
+// Affiliate ID constant from environment or default
+const AFFILIATE_ID = process.env.ALI_TRACKING_ID || 'ali_smart_finder_v1';
+
 function extractImageUrl(query) {
   const raw = query.imgUrl || query.imageUrl || query.img || null;
   if (!raw) return null;
@@ -53,9 +56,9 @@ module.exports = async function handler(req, res) {
 
     if (productIds.length === 0) {
       return res.status(200).json({
-        success: true,
+        status: 'success',
         products: [],
-        count: 0
+        message: 'No matches found'
       });
     }
 
@@ -65,10 +68,28 @@ module.exports = async function handler(req, res) {
 
     console.log('[API Search] Returning', products.length, 'products with details');
 
+    // Enrich products with affiliate-ready URLs and standard field names
+    const enrichedProducts = products.map(product => {
+      const affiliateUrl = product.affiliateLink || product.productUrl || '';
+      // Ensure affiliate ID is in the URL
+      const finalUrl = affiliateUrl.includes('?') 
+        ? `${affiliateUrl}&aff_id=${AFFILIATE_ID}` 
+        : `${affiliateUrl}?aff_id=${AFFILIATE_ID}`;
+      
+      return {
+        title: product.title || '',
+        price: product.price || '',
+        imageUrl: product.productImage || product.imageUrl || '',
+        productUrl: finalUrl,
+        rating: product.rating || null,
+        productId: product.productId || ''
+      };
+    });
+
     return res.status(200).json({
-      success: true,
-      products,
-      count: products.length
+      status: 'success',
+      products: enrichedProducts,
+      count: enrichedProducts.length
     });
   } catch (error) {
     console.error('[API Search] Error:', error.message);
