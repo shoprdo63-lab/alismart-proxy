@@ -18,16 +18,21 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const { imageUrl } = req.query;
+    const image = req.query.imageUrl || req.query.imgUrl;
 
-    if (!imageUrl) {
-      return res.status(400).json({ error: 'imageUrl query parameter is required' });
+    if (!image) {
+      console.log('[API Search] Missing required parameters. Query params:', req.query);
+      return res.status(400).json({ 
+        error: 'imageUrl or imgUrl query parameter is required',
+        receivedParams: Object.keys(req.query),
+        hint: 'Please provide either ?imageUrl=... or ?imgUrl=... in your request'
+      });
     }
 
-    console.log('[API Search] Fetching product IDs for image:', imageUrl);
+    console.log('[API Search] Fetching product IDs for image:', image);
 
     // Call the service function to get product IDs
-    const productIds = await getIdsByImage(imageUrl);
+    const productIds = await getIdsByImage(image);
 
     console.log('[API Search] Found', productIds.length, 'product IDs');
 
