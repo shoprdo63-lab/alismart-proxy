@@ -212,7 +212,7 @@ function enrichProducts(products) {
       trustScore: product.trustScore || 0,
       storeUrl: String(product.storeUrl || ''),
       commissionRate: String(product.commissionRate || ''),
-      category: product.category || null,
+      category: product.category || detectCategory(product.title),
       shippingSpeed: product.shippingSpeed || 'standard',
       relevanceScore: product.relevanceScore || 0,
       marketPosition: product.marketPosition || 'mid'
@@ -281,17 +281,17 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // Priority 2: Batch keyword search — 50 pages (chunks of 5) for 1000+ results
+      // Priority 2: Batch keyword search — 4 sorts × 20 pages for ~1,500 raw products
       if (results.length === 0 && q) {
         try {
-          console.log('[API] EXACT Priority 2: Batch keyword search (50 pages, chunks of 5)');
+          console.log('[API] EXACT Priority 2: Batch keyword search (80 pages, 4 sorts × 20 pages)');
           const cleaned = smartClean(q);
           const safeQuery = smartTruncate(cleaned || q);
           console.log('[API] Cleaned:', q.substring(0, 40), '→', safeQuery);
           
           if (safeQuery) {
-            results = await searchByKeywordsBatch(safeQuery, 50, 5);
-            pagesScanned = 50;
+            results = await searchByKeywordsBatch(safeQuery, 80, 5);
+            pagesScanned = 80;
           }
         } catch (e) {
           console.log('[API] Batch search failed:', e.message);
@@ -325,8 +325,8 @@ module.exports = async function handler(req, res) {
             console.log('[API] Fallback query:', q.substring(0, 40), '→', safeQuery);
             
             if (safeQuery) {
-              results = await searchByKeywordsBatch(safeQuery, 50, 5);
-              pagesScanned = 50;
+              results = await searchByKeywordsBatch(safeQuery, 80, 5);
+              pagesScanned = 80;
               console.log('[API] Fallback batch found:', results.length);
             }
           }
@@ -337,39 +337,38 @@ module.exports = async function handler(req, res) {
     }
 
     // =====================================================
-    // RANKING & SAFETY LAYERS
+    // RANKING & SAFETY LAYERS  (spec §6 pipeline order)
     // =====================================================
-    
-    // Layer 1: Category filtering
+
+    // Layer 1 — THE SHIELD: Halachic content safety filter
+    // Runs on ALL raw products before any other filtering.
+    if (results.length > 0) {
+      const rawCount = results.length;
+      const { filtered, blockedCount } = filterProducts(results);
+      console.log(`[API] Content filter (Shield): ${rawCount} → ${filtered.length} (blocked ${blockedCount})`);
+      results = filtered;
+    }
+
+    // Layer 2: Category filtering
     if (results.length > 0 && sourceCategory) {
       const beforeFilter = results.length;
       results = filterByCategory(results, sourceCategory);
       console.log('[API] Category filter:', beforeFilter, '→', results.length, '(', sourceCategory, ')');
     }
-    
-    // Layer 2: Price filtering - remove suspiciously cheap items (likely spare parts)
+
+    // Layer 3: Price filtering - remove suspiciously cheap items (likely spare parts)
     if (results.length > 0 && originalPrice) {
       const beforePriceFilter = results.length;
       results = filterByPrice(results, originalPrice);
       console.log('[API] Price filter:', beforePriceFilter, '→', results.length, '(min 40% of', originalPrice, ')');
     }
 
-    // Layer 3: Halachic content safety filter
-    if (results.length > 0) {
-      const { filtered, blockedCount } = filterProducts(results);
-      if (blockedCount > 0) {
-        console.log('[API] Content filter:', results.length, '→', filtered.length, `(blocked ${blockedCount})`);
-      }
-      results = filtered;
-    }
-
-    // Layer 4: Semantic noun-matching relevance filter
+    // Layer 4 — SNIPER FILTER: Semantic noun-matching relevance
+    // Stamps relevanceScore on every surviving item; drops items < 25.
     if (results.length > 0 && q) {
       const beforeRelevance = results.length;
       const { relevant, droppedCount } = filterByRelevance(results, q, 25);
-      if (droppedCount > 0) {
-        console.log('[API] Relevance filter:', beforeRelevance, '→', relevant.length, `(dropped ${droppedCount} irrelevant)`);
-      }
+      console.log(`[API] Relevance filter (Sniper): ${beforeRelevance} → ${relevant.length} (dropped ${droppedCount} irrelevant)`);
       results = relevant;
     }
 

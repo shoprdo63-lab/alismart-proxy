@@ -374,7 +374,7 @@ async function searchByKeywordsPage(keywords, pageNo = 1, sort = '') {
         fields: 'product_id,product_title,product_main_image_url,product_detail_url,sale_price,original_price,promotion_link,evaluate_rate,lastest_volume,discount,commission_rate,shop_url',
         keywords: keywords.trim(),
         page_no: pageNo,
-        page_size: 50,
+        page_size: 20,
         tracking_id: TRACKING_ID
     };
 
@@ -495,8 +495,8 @@ async function searchByKeywordsBatch(keywords, totalPages = 50, chunkSize = 5) {
         return [];
     }
 
-    const TARGET_COUNT = 1000;
-    const pagesPerSort = Math.min(Math.ceil(totalPages / SORT_STRATEGIES.length), 15);
+    const TARGET_COUNT = 1500;
+    const pagesPerSort = Math.min(Math.ceil(totalPages / SORT_STRATEGIES.length), 20);
     const effectiveChunkSize = Math.max(chunkSize, 5);
 
     console.log(`[searchByKeywordsBatch] Multi-sort extraction: ${SORT_STRATEGIES.length} sorts × ${pagesPerSort} pages (chunks of ${effectiveChunkSize}) for: "${keywords}"`);
