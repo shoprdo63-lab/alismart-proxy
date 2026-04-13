@@ -1,4 +1,7 @@
-const { getIdsByImage, getProductDetails, searchByKeywords, searchByProductId } = require('../services/aliexpress.js');
+const { getIdsByImage, getProductDetails, searchByKeywords, searchByProductId, searchByKeywordsBatch } = require('../services/aliexpress.js');
+const { analyzeNiche, filterByRelevance } = require('../services/analytics.js');
+const cache = require('../services/cache.js');
+const { filterProducts } = require('../services/content-filter.js');
 
 const AFFILIATE_ID = process.env.ALI_TRACKING_ID || 'ali_smart_finder_v1';
 const MAX_QUERY_LENGTH = 100;
@@ -196,10 +199,20 @@ function enrichProducts(products) {
     return {
       title: String(product.title || '').substring(0, 200),
       price: String(product.price || ''),
+      originalPrice: String(product.originalPrice || ''),
+      priceNumeric: product.priceNumeric || 0,
+      discountPct: product.discountPct || 0,
       imgUrl: normalizeImageUrl(product.productImage || product.imageUrl || ''),
       productUrl: String(finalUrl || ''),
       rating: product.rating || null,
-      productId: String(product.productId || '')
+      totalSales: product.totalSales || 0,
+      trustScore: product.trustScore || 0,
+      relevanceScore: product.relevanceScore || 0,
+      productId: String(product.productId || ''),
+      storeUrl: String(product.storeUrl || ''),
+      commissionRate: String(product.commissionRate || ''),
+      category: product.category || null,
+      marketPosition: product.marketPosition || 'mid'
     };
   });
 }
@@ -217,6 +230,8 @@ module.exports = async function handler(req, res) {
   }
 
   try {
+    const executionStart = Date.now();
+
     // Extract parameters
     const q = req.query?.q || req.query?.query || req.query?.title || '';
     const searchMode = req.query?.searchMode || 'exact'; // 'exact' or 'visual'
@@ -231,12 +246,24 @@ module.exports = async function handler(req, res) {
 
     console.log('[API] Mode:', searchMode, '| Category:', sourceCategory, '| PID:', productId || 'none', '| Img:', !!image, '| OrigPrice:', originalPrice || 'none');
 
+    // =====================================================
+    // CACHE CHECK
+    // =====================================================
+    const cKey = cache.cacheKey('search', searchMode, q || rawProductId || rawImgUrl);
+    const cached = cache.get(cKey);
+    if (cached) {
+      const executionTimeMs = Date.now() - executionStart;
+      console.log(`[API] Cache HIT for key "${cKey}" — ${cached.count} products in ${executionTimeMs}ms`);
+      return res.status(200).json({ ...cached, cached: true, executionTimeMs });
+    }
+
     let results = [];
+    let pagesScanned = 0;
 
     // =====================================================
     // MODE: EXACT - Find the same product from other sellers
     // Priority 1: Search by productId (most accurate)
-    // Priority 2: Fallback to cleaned text search (removes "Luxury", "New", "Shipping", etc.)
+    // Priority 2: Batch keyword search (6 pages, 100+ results)
     // =====================================================
     if (searchMode === 'exact') {
       // Priority 1: Product ID search
@@ -244,25 +271,27 @@ module.exports = async function handler(req, res) {
         try {
           console.log('[API] EXACT Priority 1: ProductId search');
           results = await searchByProductId(productId);
+          pagesScanned = 1;
           console.log('[API] ProductId found:', results.length);
         } catch (e) {
           console.log('[API] ProductId failed:', e.message);
         }
       }
 
-      // Priority 2: Cleaned text search (strip marketing noise)
+      // Priority 2: Batch keyword search — 50 pages (chunks of 5) for 1000+ results
       if (results.length === 0 && q) {
         try {
-          console.log('[API] EXACT Priority 2: Cleaned text search');
+          console.log('[API] EXACT Priority 2: Batch keyword search (50 pages, chunks of 5)');
           const cleaned = smartClean(q);
           const safeQuery = smartTruncate(cleaned || q);
           console.log('[API] Cleaned:', q.substring(0, 40), '→', safeQuery);
           
           if (safeQuery) {
-            results = await searchByKeywords(safeQuery);
+            results = await searchByKeywordsBatch(safeQuery, 50, 5);
+            pagesScanned = 50;
           }
         } catch (e) {
-          console.log('[API] Text search failed:', e.message);
+          console.log('[API] Batch search failed:', e.message);
         }
       }
     }
@@ -271,6 +300,7 @@ module.exports = async function handler(req, res) {
     // MODE: VISUAL - Find visually similar products by image ONLY
     // Sends ONLY imgUrl to AliExpress, completely ignores title/text
     // This prevents unrelated results (furniture, makeup) caused by title noise
+    // FALLBACK: If visual search returns no results, fallback to batch keyword search
     // =====================================================
     else if (searchMode === 'visual') {
       // Visual search ONLY - send image URL to AliExpress, ignore all text
@@ -280,8 +310,23 @@ module.exports = async function handler(req, res) {
           const imageResult = await getIdsByImage(image);
           if (imageResult?.productIds?.length > 0) {
             results = await getProductDetails(imageResult.productIds);
+            pagesScanned = 1;
           }
           console.log('[API] Visual found:', results.length);
+          
+          // FALLBACK: If no visual results, try batch keyword search (50 pages)
+          if (results.length === 0 && q) {
+            console.log('[API] VISUAL FALLBACK: No visual results, trying batch keyword search');
+            const cleaned = smartClean(q);
+            const safeQuery = smartTruncate(cleaned || q);
+            console.log('[API] Fallback query:', q.substring(0, 40), '→', safeQuery);
+            
+            if (safeQuery) {
+              results = await searchByKeywordsBatch(safeQuery, 50, 5);
+              pagesScanned = 50;
+              console.log('[API] Fallback batch found:', results.length);
+            }
+          }
         } catch (e) {
           console.log('[API] Visual failed:', e.message);
         }
@@ -289,34 +334,73 @@ module.exports = async function handler(req, res) {
     }
 
     // =====================================================
-    // RANKING & SAFETY LAYER
+    // RANKING & SAFETY LAYERS
     // =====================================================
     
-    // Category filtering
+    // Layer 1: Category filtering
     if (results.length > 0 && sourceCategory) {
       const beforeFilter = results.length;
       results = filterByCategory(results, sourceCategory);
       console.log('[API] Category filter:', beforeFilter, '→', results.length, '(', sourceCategory, ')');
     }
     
-    // Price filtering - remove suspiciously cheap items (likely spare parts)
+    // Layer 2: Price filtering - remove suspiciously cheap items (likely spare parts)
     if (results.length > 0 && originalPrice) {
       const beforePriceFilter = results.length;
       results = filterByPrice(results, originalPrice);
       console.log('[API] Price filter:', beforePriceFilter, '→', results.length, '(min 40% of', originalPrice, ')');
     }
 
-    // Enrich and return
-    const enriched = enrichProducts(results);
-    
-    return res.status(200).json({
+    // Layer 3: Halachic content safety filter
+    if (results.length > 0) {
+      const { filtered, blockedCount } = filterProducts(results);
+      if (blockedCount > 0) {
+        console.log('[API] Content filter:', results.length, '→', filtered.length, `(blocked ${blockedCount})`);
+      }
+      results = filtered;
+    }
+
+    // Layer 4: Semantic noun-matching relevance filter
+    if (results.length > 0 && q) {
+      const beforeRelevance = results.length;
+      const { relevant, droppedCount } = filterByRelevance(results, q, 25);
+      if (droppedCount > 0) {
+        console.log('[API] Relevance filter:', beforeRelevance, '→', relevant.length, `(dropped ${droppedCount} irrelevant)`);
+      }
+      results = relevant;
+    }
+
+    // =====================================================
+    // ENRICHMENT & ANALYTICS
+    // =====================================================
+    const { enrichedProducts, nicheAnalytics } = analyzeNiche(results, q);
+
+    // Final enrichment pass (affiliate links, image normalization, truncation)
+    const finalProducts = enrichProducts(enrichedProducts);
+
+    const executionTimeMs = Date.now() - executionStart;
+    console.log(`[API] Execution Time: ${executionTimeMs}ms for ${finalProducts.length} items (target: <5000ms)`);
+    if (executionTimeMs > 5000) {
+      console.warn(`[API] ⚠ SLOW: ${executionTimeMs}ms exceeds 5000ms target for ${finalProducts.length} items`);
+    }
+
+    const responsePayload = {
       success: true,
-      products: enriched,
-      data: enriched,
-      count: enriched.length,
+      products: finalProducts,
+      data: finalProducts,
+      count: finalProducts.length,
       mode: searchMode,
-      category: sourceCategory
-    });
+      category: sourceCategory,
+      nicheAnalytics,
+      executionTimeMs,
+      cached: false,
+      pagesScanned
+    };
+
+    // Store in cache for 1 hour
+    cache.set(cKey, responsePayload);
+
+    return res.status(200).json(responsePayload);
 
   } catch (error) {
     // Absolute bulletproof safety
