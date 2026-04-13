@@ -496,8 +496,8 @@ async function searchByKeywordsBatch(keywords, totalPages = 50, chunkSize = 5) {
     }
 
     const TARGET_COUNT = 1000;
-    const pagesPerSort = Math.min(Math.ceil(totalPages / SORT_STRATEGIES.length), 10);
-    const effectiveChunkSize = Math.max(chunkSize, 8);
+    const pagesPerSort = Math.min(Math.ceil(totalPages / SORT_STRATEGIES.length), 15);
+    const effectiveChunkSize = Math.max(chunkSize, 5);
 
     console.log(`[searchByKeywordsBatch] Multi-sort extraction: ${SORT_STRATEGIES.length} sorts × ${pagesPerSort} pages (chunks of ${effectiveChunkSize}) for: "${keywords}"`);
     const startTime = Date.now();

@@ -197,21 +197,24 @@ function enrichProducts(products) {
       : `${affiliateUrl}?aff_id=${AFFILIATE_ID}`;
     
     return {
+      productId: String(product.productId || ''),
       title: String(product.title || '').substring(0, 200),
       price: String(product.price || ''),
       originalPrice: String(product.originalPrice || ''),
       priceNumeric: product.priceNumeric || 0,
+      currency: product.currency || 'USD',
       discountPct: product.discountPct || 0,
       imgUrl: normalizeImageUrl(product.productImage || product.imageUrl || ''),
       productUrl: String(finalUrl || ''),
+      affiliateLink: String(product.affiliateLink || finalUrl || ''),
       rating: product.rating || null,
       totalSales: product.totalSales || 0,
       trustScore: product.trustScore || 0,
-      relevanceScore: product.relevanceScore || 0,
-      productId: String(product.productId || ''),
       storeUrl: String(product.storeUrl || ''),
       commissionRate: String(product.commissionRate || ''),
       category: product.category || null,
+      shippingSpeed: product.shippingSpeed || 'standard',
+      relevanceScore: product.relevanceScore || 0,
       marketPosition: product.marketPosition || 'mid'
     };
   });
