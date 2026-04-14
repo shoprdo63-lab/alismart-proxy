@@ -10,6 +10,7 @@ const MAX_QUERY_LENGTH = 100;
 const MAX_RESULTS = 1000; // Maximum payload capacity per spec
 const AUTO_MINIMAL_THRESHOLD = 500; // Auto-enable minimal mode for large result sets
 const PROCESSING_TIME_TARGET = 2000; // 2 second target for filtering/sorting
+const MAX_PER_STORE = 3; // Anti-monopoly: max items from a single store
 
 // Category keywords for filtering
 const CATEGORY_KEYWORDS = {
@@ -24,7 +25,6 @@ function applyCORS(res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Content-Encoding', 'gzip, br');
 }
 
 /**
@@ -49,7 +49,28 @@ function detectCategory(text) {
 function smartClean(query) {
   if (!query || typeof query !== 'string') return '';
 
-  let cleaned = query.toLowerCase();
+  let cleaned = query;
+
+  // STEP 0: Strip ALL non-Latin scripts (Hebrew, Arabic, Chinese, Cyrillic, etc.)
+  // This removes UI text like "מלאי מצומצם", price labels, and RTL noise
+  cleaned = cleaned.replace(/[\u0590-\u05FF]/g, ' ');  // Hebrew
+  cleaned = cleaned.replace(/[\u0600-\u06FF]/g, ' ');  // Arabic
+  cleaned = cleaned.replace(/[\u4E00-\u9FFF]/g, ' ');  // Chinese
+  cleaned = cleaned.replace(/[\u0400-\u04FF]/g, ' ');  // Cyrillic
+  cleaned = cleaned.replace(/[\u3040-\u30FF]/g, ' ');  // Japanese
+  cleaned = cleaned.replace(/[\uAC00-\uD7AF]/g, ' ');  // Korean
+
+  // STEP 0b: Remove price tags and currency patterns (e.g., "$12.99", "US $5.00", "₪39.90", "EUR 10")
+  cleaned = cleaned.replace(/[₪$€£¥]\s*\d+[.,]?\d*/g, ' ');
+  cleaned = cleaned.replace(/\b(USD|EUR|GBP|ILS|CNY|US\s*\$)\s*\d+[.,]?\d*/gi, ' ');
+  cleaned = cleaned.replace(/\d+[.,]?\d*\s*[₪$€£¥]/g, ' ');
+
+  // STEP 0c: Remove dimension/spec patterns (e.g., "100x200cm", "5V/2A", "250ml")
+  cleaned = cleaned.replace(/\b\d+(\.\d+)?\s*x\s*\d+(\.\d+)?\s*(cm|mm|m|inch|in)?\b/gi, ' ');
+  cleaned = cleaned.replace(/\b\d+(\.\d+)?\s*(cm|mm|m|kg|g|lb|oz|ml|l|v|w|a|mah|inch|in)\b/gi, ' ');
+  cleaned = cleaned.replace(/\b\d+\s*\/\s*\d+\s*(v|a|w)\b/gi, ' ');
+
+  cleaned = cleaned.toLowerCase();
 
   // STEP 1: Remove quantity patterns (e.g., "32pcs", "30pcs", "100pcs")
   cleaned = cleaned.replace(/\b\d+\s*(pcs|pc|pieces|piece|units|unit|items|item|packs|pack|sets|set)\b/gi, ' ');
@@ -87,7 +108,11 @@ function smartClean(query) {
     'adults', 'kids', 'children', 'women', 'men', 'boys', 'girls',
     // Articles and prepositions
     'with', 'and', 'or', 'the', 'a', 'an', 'in', 'on', 'at', 'to', 'of', 'for',
-    'from', 'by', 'into', 'onto', 'upon'
+    'from', 'by', 'into', 'onto', 'upon',
+    // Common e-commerce UI noise
+    'add', 'cart', 'buy', 'now', 'stock', 'sold', 'out', 'available', 'left',
+    'order', 'orders', 'review', 'reviews', 'rating', 'ratings', 'star', 'stars',
+    'color', 'colour', 'size', 'option', 'options', 'select', 'choose', 'picked'
   ];
 
   // Remove noise words
@@ -104,9 +129,12 @@ function smartClean(query) {
   // Get meaningful words (3+ chars)
   const words = cleaned.split(' ').filter(w => w.length >= 3);
 
-  // If too few words, fallback to original first 3 meaningful words
+  // If too few words, fallback to original first 3 meaningful words (Latin only)
   if (words.length < 2) {
-    const originalWords = query.toLowerCase().split(/\s+/).filter(w => w.length >= 3);
+    const originalWords = query.toLowerCase()
+      .replace(/[^\x20-\x7E]/g, ' ')  // Keep only basic Latin/ASCII
+      .split(/\s+/)
+      .filter(w => w.length >= 3);
     return originalWords.slice(0, 3).join(' ');
   }
 
@@ -191,6 +219,65 @@ function normalizeImageUrl(url) {
   if (normalized.startsWith('//')) normalized = 'https:' + normalized;
   if (normalized.startsWith('http://')) normalized = normalized.replace('http://', 'https://');
   return normalized;
+}
+
+/**
+ * Extract a stable store identifier from storeUrl or fallback fields.
+ * Returns 'unknown_<index>' when no store info is available so those items
+ * never collide with each other.
+ */
+function extractStoreId(product, index) {
+  const url = product.storeUrl || '';
+  if (url) {
+    // Typical AliExpress store URL: https://www.aliexpress.com/store/1234567
+    const match = url.match(/\/store\/(\d+)/);
+    if (match) return match[1];
+    // Fallback: use full URL as key
+    return url;
+  }
+  // No store info — treat as unique so it doesn't get unfairly grouped
+  return `unknown_${index}`;
+}
+
+/**
+ * Store-ID Diversification (Anti-Monopoly)
+ * Limits any single store to MAX_PER_STORE items in the final list.
+ * Overflow items go to a waitlist and backfill remaining capacity.
+ * Products are assumed to already be sorted by quality/trust.
+ */
+function diversifyByStore(products, maxPerStore = MAX_PER_STORE) {
+  if (!Array.isArray(products) || products.length === 0) return { diversified: products || [], cappedStores: 0 };
+
+  const storeCounts = new Map();
+  const accepted = [];
+  const waitlist = [];
+  let cappedStores = 0;
+  const cappedSet = new Set();
+
+  for (let i = 0; i < products.length; i++) {
+    const storeId = extractStoreId(products[i], i);
+    const count = storeCounts.get(storeId) || 0;
+
+    if (count < maxPerStore) {
+      storeCounts.set(storeId, count + 1);
+      accepted.push(products[i]);
+    } else {
+      waitlist.push(products[i]);
+      if (!cappedSet.has(storeId)) {
+        cappedSet.add(storeId);
+        cappedStores++;
+      }
+    }
+  }
+
+  // Backfill: add waitlist items that come from stores with remaining capacity
+  // This handles edge cases where accepted list is short
+  for (const product of waitlist) {
+    if (accepted.length >= products.length) break;
+    accepted.push(product);
+  }
+
+  return { diversified: accepted, cappedStores };
 }
 
 function enrichProducts(products) {
@@ -452,6 +539,17 @@ module.exports = async function handler(req, res) {
       perfTimings.relevanceFilter = Date.now() - relStart;
     }
 
+    // Layer 5 — STORE DIVERSIFICATION: Anti-monopoly filter
+    // Limits any single store to MAX_PER_STORE items so users see variety across sellers
+    if (results.length > 0) {
+      const storeStart = Date.now();
+      const beforeDiversify = results.length;
+      const { diversified, cappedStores } = diversifyByStore(results, MAX_PER_STORE);
+      console.log(`[API] Store diversification: ${beforeDiversify} → ${diversified.length} (${cappedStores} stores capped at ${MAX_PER_STORE})`);
+      results = diversified;
+      perfTimings.storeDiversification = Date.now() - storeStart;
+    }
+
     perfTimings.totalFiltering = Date.now() - filterStart;
 
     // =====================================================
@@ -518,9 +616,8 @@ module.exports = async function handler(req, res) {
       // Store minified version in cache
       cache.set(cKey, minifiedPayload);
       
-      // Return minified JSON with explicit content-type
-      res.setHeader('Content-Type', 'application/json');
-      return res.status(200).send(JSON.stringify(minifiedPayload));
+      // Return minified JSON — use res.json() for clean standard output
+      return res.status(200).json(minifiedPayload);
     }
 
     // Store in cache for 1 hour

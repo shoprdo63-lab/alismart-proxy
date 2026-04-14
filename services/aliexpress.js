@@ -449,7 +449,8 @@ const SORT_STRATEGIES = [
     '',                   // Default (best match / relevance)
     'LAST_VOLUME_DESC',   // Most sold first
     'SALE_PRICE_ASC',     // Cheapest first
-    'SALE_PRICE_DESC'     // Most expensive first
+    'SALE_PRICE_DESC',    // Most expensive first
+    'EVALUATE_RATE_DESC'  // Top rated first — surfaces high-quality items from different sellers
 ];
 
 /**
