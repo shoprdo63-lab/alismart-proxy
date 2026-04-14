@@ -4,6 +4,7 @@
     { "src": "api/*.js", "use": "@vercel/node" }
   ],
   "routes": [
-    { "src": "/api/search", "dest": "/api/search.js" }
+    { "src": "/api/search", "dest": "/api/search.js" },
+    { "src": "/api/optimizer/batch-lookup", "dest": "/api/optimizer/batch-lookup.js" }
   ]
 }

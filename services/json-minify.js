@@ -33,7 +33,9 @@ const KEY_MAP = {
   marketPosition: 'mp',
   shippingCost: 'sc',
   isChoiceItem: 'ic',
-  
+  packageWeight: 'w',
+  categoryId: 'cid',
+
   // Response envelope fields
   success: 'ok',
   products: 'data',

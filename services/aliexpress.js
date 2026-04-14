@@ -227,7 +227,9 @@ async function getProductDetails(productIds) {
             commissionRate: item?.commission_rate || '',
             storeUrl: item?.shop_url || '',
             shippingCost: item?.shipping_cost || '0',
-            isChoiceItem: item?.is_choice_item === 'Y' || item?.is_choice_item === true || false
+            isChoiceItem: item?.is_choice_item === 'Y' || item?.is_choice_item === true || false,
+            packageWeight: item?.package_weight ? parseFloat(item.package_weight) : null,
+            categoryId: item?.category_id || ''
         }));
     } catch (error) {
         console.error('[AliExpress Service] Failed to fetch product details');
@@ -297,7 +299,9 @@ async function searchByKeywords(keywords) {
             commissionRate: item?.commission_rate || '',
             storeUrl: item?.shop_url || '',
             shippingCost: item?.shipping_cost || '0',
-            isChoiceItem: item?.is_choice_item === 'Y' || item?.is_choice_item === true || false
+            isChoiceItem: item?.is_choice_item === 'Y' || item?.is_choice_item === true || false,
+            packageWeight: item?.package_weight ? parseFloat(item.package_weight) : null,
+            categoryId: item?.category_id || ''
         }));
     } catch (error) {
         console.error('[searchByKeywords] Error:', error.message);
@@ -366,7 +370,9 @@ async function searchByProductId(productId) {
       commissionRate: item?.commission_rate || '',
       storeUrl: item?.shop_url || '',
       shippingCost: item?.shipping_cost || '0',
-      isChoiceItem: item?.is_choice_item === 'Y' || item?.is_choice_item === true || false
+      isChoiceItem: item?.is_choice_item === 'Y' || item?.is_choice_item === true || false,
+      packageWeight: item?.package_weight ? parseFloat(item.package_weight) : null,
+      categoryId: item?.category_id || ''
     }));
   } catch (error) {
     console.error('[searchByProductId] Error:', error.message);
@@ -433,7 +439,9 @@ async function searchByKeywordsPage(keywords, pageNo = 1, sort = '') {
             commissionRate: item?.commission_rate || '',
             storeUrl: item?.shop_url || '',
             shippingCost: item?.shipping_cost || '0',
-            isChoiceItem: item?.is_choice_item === 'Y' || item?.is_choice_item === true || false
+            isChoiceItem: item?.is_choice_item === 'Y' || item?.is_choice_item === true || false,
+            packageWeight: item?.package_weight ? parseFloat(item.package_weight) : null,
+            categoryId: item?.category_id || ''
         }));
     } catch (error) {
         console.error(`[searchByKeywordsPage] Page ${pageNo} error:`, error.message);
