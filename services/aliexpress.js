@@ -564,4 +564,170 @@ async function searchByKeywordsBatch(keywords, targetCount = 1000, chunkSize = 1
     return allProducts;
 }
 
-module.exports = { getIdsByImage, getProductDetails, searchByKeywords, searchByProductId, searchByKeywordsBatch };
+/**
+ * Find alternative sellers that carry multiple items from a cart
+ * Identifies "Super-Sellers" or "AliExpress Choice" stores for bundle optimization
+ *
+ * @param {string[]} productIds - Array of product IDs from the cart
+ * @param {Function} contentFilter - Optional content filter function (The Shield)
+ * @returns {Promise<Array>} Array of bundles: { storeId, storeUrl, storeName, products: [], isChoiceStore, matchCount }
+ */
+async function findAlternativeSellers(productIds, contentFilter = null) {
+    if (!Array.isArray(productIds) || productIds.length === 0) {
+        console.error('[findAlternativeSellers] No productIds provided');
+        return [];
+    }
+
+    console.log(`[findAlternativeSellers] Analyzing ${productIds.length} cart items for bundle opportunities`);
+    const startTime = Date.now();
+
+    // Step 1: Fetch alternative products for each cart item
+    const storeProductMap = new Map(); // storeId -> { products: Set(), storeUrl, storeName, isChoiceCount }
+
+    const searchPromises = productIds.map(async (originalProductId) => {
+        try {
+            // Search for similar/alternative products for this cart item
+            const alternatives = await searchByProductId(originalProductId);
+
+            if (!Array.isArray(alternatives) || alternatives.length === 0) {
+                return { originalProductId, alternatives: [] };
+            }
+
+            return { originalProductId, alternatives };
+        } catch (error) {
+            console.error(`[findAlternativeSellers] Error searching for ${originalProductId}:`, error.message);
+            return { originalProductId, alternatives: [] };
+        }
+    });
+
+    const searchResults = await Promise.all(searchPromises);
+
+    // Step 2: Build store-to-products mapping
+    for (const { originalProductId, alternatives } of searchResults) {
+        for (const alt of alternatives) {
+            // Extract store ID from storeUrl
+            const storeId = extractStoreIdFromUrl(alt.storeUrl);
+            if (!storeId) continue;
+
+            // Initialize store entry if needed
+            if (!storeProductMap.has(storeId)) {
+                storeProductMap.set(storeId, {
+                    storeId,
+                    storeUrl: alt.storeUrl || '',
+                    storeName: alt.storeName || extractStoreNameFromUrl(alt.storeUrl) || '',
+                    products: new Set(),
+                    isChoiceCount: 0,
+                    totalRating: 0,
+                    ratingCount: 0
+                });
+            }
+
+            const storeEntry = storeProductMap.get(storeId);
+
+            // Add the original product this alternative represents
+            storeEntry.products.add({
+                originalProductId,
+                alternativeProductId: alt.productId,
+                alternativeTitle: alt.title,
+                alternativePrice: alt.price,
+                alternativeImage: alt.productImage
+            });
+
+            // Track Choice store indicator
+            if (alt.isChoiceItem) {
+                storeEntry.isChoiceCount++;
+            }
+
+            // Track rating for quality scoring
+            if (alt.rating && alt.rating > 0) {
+                storeEntry.totalRating += alt.rating;
+                storeEntry.ratingCount++;
+            }
+        }
+    }
+
+    // Step 3: Filter and build bundles (stores with 2+ products from cart)
+    const bundles = [];
+
+    for (const storeEntry of storeProductMap.values()) {
+        // Only include stores that have alternatives for 2+ cart items
+        if (storeEntry.products.size >= 2) {
+            const avgRating = storeEntry.ratingCount > 0
+                ? storeEntry.totalRating / storeEntry.ratingCount
+                : 0;
+
+            const bundle = {
+                storeId: storeEntry.storeId,
+                storeUrl: storeEntry.storeUrl,
+                storeName: storeEntry.storeName,
+                matchCount: storeEntry.products.size,
+                isChoiceStore: storeEntry.isChoiceCount > (storeEntry.products.size / 2),
+                avgRating: parseFloat(avgRating.toFixed(2)),
+                products: Array.from(storeEntry.products)
+            };
+
+            bundles.push(bundle);
+        }
+    }
+
+    // Step 4: Apply content filter if provided (The Shield)
+    let finalBundles = bundles;
+    if (contentFilter && typeof contentFilter === 'function') {
+        // Filter each bundle's products through content filter
+        finalBundles = bundles.map(bundle => {
+            const filteredProducts = bundle.products.filter(p => {
+                // Create a mock product object for filtering
+                const mockProduct = {
+                    title: p.alternativeTitle,
+                    productId: p.alternativeProductId
+                };
+                const filterResult = contentFilter([mockProduct]);
+                return filterResult.filtered && filterResult.filtered.length > 0;
+            });
+
+            return {
+                ...bundle,
+                products: filteredProducts,
+                matchCount: filteredProducts.length
+            };
+        }).filter(bundle => bundle.matchCount >= 2); // Re-check minimum after filtering
+    }
+
+    // Sort by match count (descending), then by Choice status, then by rating
+    finalBundles.sort((a, b) => {
+        if (b.matchCount !== a.matchCount) return b.matchCount - a.matchCount;
+        if (b.isChoiceStore !== a.isChoiceStore) return b.isChoiceStore ? 1 : -1;
+        return b.avgRating - a.avgRating;
+    });
+
+    const elapsed = Date.now() - startTime;
+    console.log(`[findAlternativeSellers] Found ${finalBundles.length} bundles in ${elapsed}ms`);
+
+    // Log bundle summary
+    for (const bundle of finalBundles) {
+        console.log(`  [Bundle] ${bundle.storeName} (${bundle.storeId}): ${bundle.matchCount} products, Choice: ${bundle.isChoiceStore}, Rating: ${bundle.avgRating}`);
+    }
+
+    return finalBundles;
+}
+
+/**
+ * Extract store ID from AliExpress store URL
+ */
+function extractStoreIdFromUrl(storeUrl) {
+    if (!storeUrl || typeof storeUrl !== 'string') return null;
+    const match = storeUrl.match(/\/store\/(\d+)/);
+    return match ? match[1] : null;
+}
+
+/**
+ * Extract store name from URL (fallback when storeName not provided)
+ */
+function extractStoreNameFromUrl(storeUrl) {
+    if (!storeUrl || typeof storeUrl !== 'string') return null;
+    // Extract store ID as fallback name
+    const storeId = extractStoreIdFromUrl(storeUrl);
+    return storeId ? `Store ${storeId}` : null;
+}
+
+module.exports = { getIdsByImage, getProductDetails, searchByKeywords, searchByProductId, searchByKeywordsBatch, findAlternativeSellers };

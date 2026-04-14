@@ -35,6 +35,14 @@ const KEY_MAP = {
   isChoiceItem: 'ic',
   packageWeight: 'w',
   categoryId: 'cid',
+  bundleId: 'bid',
+
+  // Bundle fields
+  bundles: 'bundles',
+  bundleCount: 'bc',
+  productsByStore: 'pbs',
+  originalId: 'oid',
+  alternativeId: 'aid',
 
   // Response envelope fields
   success: 'ok',

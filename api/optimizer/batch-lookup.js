@@ -8,6 +8,7 @@
 
 const { getProductDetails } = require('../../services/aliexpress.js');
 const { filterProducts } = require('../../services/content-filter.js');
+const { findBundles, assignBundleIds } = require('../../services/bundle-finder.js');
 const cache = require('../../services/cache.js');
 
 const MAX_BATCH_SIZE = 20;
@@ -34,6 +35,15 @@ function normalizeImageUrl(url) {
   return normalized;
 }
 
+/**
+ * Extract store ID from store URL
+ */
+function extractStoreId(storeUrl) {
+  if (!storeUrl || typeof storeUrl !== 'string') return null;
+  const match = storeUrl.match(/\/store\/(\d+)/);
+  return match ? match[1] : null;
+}
+
 module.exports = async function handler(req, res) {
   applyCORS(res);
 
@@ -50,7 +60,7 @@ module.exports = async function handler(req, res) {
 
   try {
     // Parse request body
-    const { productIds, targetCurrency, destinationCountry } = req.body || {};
+    const { productIds, targetCurrency, destinationCountry, findBundleOpportunities = true } = req.body || {};
 
     // Validate productIds
     if (!Array.isArray(productIds) || productIds.length === 0) {
@@ -117,8 +127,18 @@ module.exports = async function handler(req, res) {
       console.log(`[BatchLookup] Content filter blocked ${blockedCount} items`);
     }
 
+    // Find bundle opportunities if requested
+    let bundleAnalysis = null;
+    if (findBundleOpportunities && sanitizedIds.length >= 2) {
+      try {
+        bundleAnalysis = await findBundles(sanitizedIds);
+      } catch (bundleError) {
+        console.log('[BatchLookup] Bundle analysis failed (non-critical):', bundleError.message);
+      }
+    }
+
     // Normalize and structure response
-    const products = filtered.map(product => ({
+    let products = filtered.map(product => ({
       productId: String(product.productId || ''),
       title: String(product.title || '').substring(0, 200),
       price: String(product.price || ''),
@@ -133,14 +153,72 @@ module.exports = async function handler(req, res) {
       discountPct: product.discountPct || 0
     }));
 
+    // Assign bundle IDs to products
+    if (bundleAnalysis) {
+      products = assignBundleIds(products, bundleAnalysis);
+    } else {
+      products = products.map(p => ({ ...p, bundleId: null }));
+    }
+
+    // Build bundles array for response (full bundle details)
+    const bundles = bundleAnalysis ? bundleAnalysis.bundles.map(bundle => ({
+      bundleId: bundle.bundleId,
+      storeId: bundle.storeId,
+      storeName: bundle.storeName,
+      storeUrl: bundle.storeUrl,
+      isChoiceStore: bundle.isChoiceStore,
+      isSuperSeller: bundle.isSuperSeller,
+      estimatedSavings: bundle.estimatedSavings,
+      productIds: bundle.products.map(p => p.originalId),
+      products: bundle.products.map(p => ({
+        originalId: p.originalId,
+        alternativeId: p.alternativeId,
+        title: p.title?.substring(0, 100),
+        price: p.price,
+        image: p.image
+      }))
+    })) : [];
+
+    // Group products by storeId for easy client-side processing
+    const productsByStore = {};
+    for (const product of products) {
+      const storeId = extractStoreId(product.storeUrl);
+      if (storeId) {
+        if (!productsByStore[storeId]) {
+          productsByStore[storeId] = {
+            storeId,
+            storeUrl: product.storeUrl,
+            products: []
+          };
+        }
+        productsByStore[storeId].products.push(product.productId);
+      }
+    }
+
     const executionTimeMs = Date.now() - executionStart;
 
     const responsePayload = {
       success: true,
       products,
       count: products.length,
+      bundles,
+      bundleCount: bundles.length,
+      productsByStore,
       targetCurrency: targetCurrency || 'USD',
       destinationCountry: destinationCountry || '',
+      bundleAnalysis: bundleAnalysis ? {
+        totalBundles: bundleAnalysis.totalBundles,
+        canBundleAll: bundleAnalysis.canBundleAll,
+        bestBundle: bundleAnalysis.bestBundle ? {
+          bundleId: bundleAnalysis.bestBundle.bundleId,
+          storeId: bundleAnalysis.bestBundle.storeId,
+          storeName: bundleAnalysis.bestBundle.storeName,
+          productCount: bundleAnalysis.bestBundle.productCount,
+          isChoiceStore: bundleAnalysis.bestBundle.isChoiceStore,
+          isSuperSeller: bundleAnalysis.bestBundle.isSuperSeller,
+          estimatedSavings: bundleAnalysis.bestBundle.estimatedSavings
+        } : null
+      } : null,
       executionTimeMs,
       cached: false
     };
