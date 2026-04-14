@@ -2,9 +2,14 @@ const { getIdsByImage, getProductDetails, searchByKeywords, searchByProductId, s
 const { analyzeNiche, filterByRelevance } = require('../services/analytics.js');
 const cache = require('../services/cache.js');
 const { filterProducts } = require('../services/content-filter.js');
+const { deduplicateProducts, fastDeduplicate } = require('../services/deduplication.js');
+const { minifyResponse, shouldMinify, calculateSavings } = require('../services/json-minify.js');
 
 const AFFILIATE_ID = process.env.ALI_TRACKING_ID || 'ali_smart_finder_v1';
 const MAX_QUERY_LENGTH = 100;
+const MAX_RESULTS = 1000; // Maximum payload capacity per spec
+const AUTO_MINIMAL_THRESHOLD = 500; // Auto-enable minimal mode for large result sets
+const PROCESSING_TIME_TARGET = 2000; // 2 second target for filtering/sorting
 
 // Category keywords for filtering
 const CATEGORY_KEYWORDS = {
@@ -19,6 +24,7 @@ function applyCORS(res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Encoding', 'gzip, br');
 }
 
 /**
@@ -189,13 +195,17 @@ function normalizeImageUrl(url) {
 
 function enrichProducts(products) {
   if (!Array.isArray(products)) return [];
-  
+
   return products.map(product => {
     const affiliateUrl = product.affiliateLink || product.productUrl || '';
     const finalUrl = affiliateUrl.includes('?')
       ? `${affiliateUrl}&aff_id=${AFFILIATE_ID}`
       : `${affiliateUrl}?aff_id=${AFFILIATE_ID}`;
-    
+
+    // Parse shipping cost
+    const shippingCost = product.shippingCost || '0';
+    const shippingCostNum = parseFloat(String(shippingCost).replace(/[^\d.]/g, '')) || 0;
+
     return {
       productId: String(product.productId || ''),
       title: String(product.title || '').substring(0, 200),
@@ -215,9 +225,48 @@ function enrichProducts(products) {
       category: product.category || detectCategory(product.title),
       shippingSpeed: product.shippingSpeed || 'standard',
       relevanceScore: product.relevanceScore || 0,
-      marketPosition: product.marketPosition || 'mid'
+      marketPosition: product.marketPosition || 'mid',
+      shippingCost: shippingCostNum,
+      isChoiceItem: product.isChoiceItem || false
     };
   });
+}
+
+/**
+ * Minimal response mode for fast filter processing
+ * Returns only essential fields: title, price, image, link
+ * Includes additional fields for data enrichment: discountPct, shippingCost, isChoiceItem
+ */
+function enrichMinimal(products) {
+  if (!Array.isArray(products)) return [];
+
+  // Fast path: pre-allocate array for speed
+  const result = new Array(products.length);
+
+  for (let i = 0; i < products.length; i++) {
+    const product = products[i];
+    const affiliateUrl = product.affiliateLink || product.productUrl || '';
+    const finalUrl = affiliateUrl.includes('?')
+      ? `${affiliateUrl}&aff_id=${AFFILIATE_ID}`
+      : `${affiliateUrl}?aff_id=${AFFILIATE_ID}`;
+
+    // Parse shipping cost
+    const shippingCost = product.shippingCost || '0';
+    const shippingCostNum = parseFloat(String(shippingCost).replace(/[^\d.]/g, '')) || 0;
+
+    // Immutable Core + Enrichment Fields (per spec §2)
+    result[i] = {
+      title: String(product.title || '').substring(0, 200),
+      price: String(product.price || ''),
+      imgUrl: normalizeImageUrl(product.productImage || product.imageUrl || ''),
+      affiliateLink: String(product.affiliateLink || finalUrl || ''),
+      discountPct: product.discountPct || 0,
+      shippingCost: shippingCostNum,
+      isChoiceItem: product.isChoiceItem || false
+    };
+  }
+
+  return result;
 }
 
 module.exports = async function handler(req, res) {
@@ -234,6 +283,7 @@ module.exports = async function handler(req, res) {
 
   try {
     const executionStart = Date.now();
+    const perfTimings = {}; // Track each phase for optimization analysis
 
     // Extract parameters
     const q = req.query?.q || req.query?.query || req.query?.title || '';
@@ -241,6 +291,8 @@ module.exports = async function handler(req, res) {
     const rawProductId = req.query?.productId || '';
     const rawImgUrl = req.query?.imgUrl || req.query?.imageUrl || '';
     const originalPrice = req.query?.originalPrice || req.query?.price || '';
+    const minimal = req.query?.minimal === 'true' || req.query?.minimal === '1'; // Minimal mode: only title, price, image, link
+    const limit = Math.min(parseInt(req.query?.limit) || MAX_RESULTS, MAX_RESULTS); // Cap at 1000 per spec
 
     // Sanitize
     const productId = sanitizeProductId(rawProductId);
@@ -281,17 +333,20 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // Priority 2: Batch keyword search — 4 sorts × 20 pages for ~1,500 raw products
+      // Priority 2: Batch keyword search — targeting up to 1,000 results per spec
       if (results.length === 0 && q) {
         try {
-          console.log('[API] EXACT Priority 2: Batch keyword search (80 pages, 4 sorts × 20 pages)');
+          console.log(`[API] EXACT Priority 2: Batch keyword search targeting ${limit} results`);
           const cleaned = smartClean(q);
           const safeQuery = smartTruncate(cleaned || q);
           console.log('[API] Cleaned:', q.substring(0, 40), '→', safeQuery);
-          
+
           if (safeQuery) {
-            results = await searchByKeywordsBatch(safeQuery, 80, 5);
-            pagesScanned = 80;
+            const batchStart = Date.now();
+            // Fetch 1.5x limit to account for filtering losses
+            results = await searchByKeywordsBatch(safeQuery, Math.ceil(limit * 1.5), 10);
+            pagesScanned = Math.ceil(Math.ceil(limit * 1.5) / 20);
+            perfTimings.fetch = Date.now() - batchStart;
           }
         } catch (e) {
           console.log('[API] Batch search failed:', e.message);
@@ -317,16 +372,18 @@ module.exports = async function handler(req, res) {
           }
           console.log('[API] Visual found:', results.length);
           
-          // FALLBACK: If no visual results, try batch keyword search (50 pages)
+          // FALLBACK: If no visual results, try batch keyword search
           if (results.length === 0 && q) {
             console.log('[API] VISUAL FALLBACK: No visual results, trying batch keyword search');
             const cleaned = smartClean(q);
             const safeQuery = smartTruncate(cleaned || q);
             console.log('[API] Fallback query:', q.substring(0, 40), '→', safeQuery);
-            
+
             if (safeQuery) {
-              results = await searchByKeywordsBatch(safeQuery, 80, 5);
-              pagesScanned = 80;
+              const batchStart = Date.now();
+              results = await searchByKeywordsBatch(safeQuery, Math.ceil(limit * 1.5), 10);
+              pagesScanned = Math.ceil(Math.ceil(limit * 1.5) / 20);
+              perfTimings.fetch = Date.now() - batchStart;
               console.log('[API] Fallback batch found:', results.length);
             }
           }
@@ -339,51 +396,96 @@ module.exports = async function handler(req, res) {
     // =====================================================
     // RANKING & SAFETY LAYERS  (spec §6 pipeline order)
     // =====================================================
+    const filterStart = Date.now();
+
+    // Layer 0 — DEDUPLICATION: Aggressive fingerprint-based deduplication
+    // Removes duplicate listings, keeping highest Value Score (Orders/Price*Rating)
+    if (results.length > 0) {
+      const dedupStart = Date.now();
+      const beforeDedup = results.length;
+      // Use fast deduplication for large datasets (1000+ products)
+      const { deduped, removedCount } = results.length > 500 
+        ? fastDeduplicate(results) 
+        : deduplicateProducts(results);
+      console.log(`[API] Deduplication: ${beforeDedup} → ${deduped.length} (removed ${removedCount} duplicates)`);
+      results = deduped;
+      perfTimings.deduplication = Date.now() - dedupStart;
+    }
 
     // Layer 1 — THE SHIELD: Halachic content safety filter
     // Runs on ALL raw products before any other filtering.
     if (results.length > 0) {
+      const shieldStart = Date.now();
       const rawCount = results.length;
       const { filtered, blockedCount } = filterProducts(results);
       console.log(`[API] Content filter (Shield): ${rawCount} → ${filtered.length} (blocked ${blockedCount})`);
       results = filtered;
+      perfTimings.contentFilter = Date.now() - shieldStart;
     }
 
     // Layer 2: Category filtering
     if (results.length > 0 && sourceCategory) {
+      const catStart = Date.now();
       const beforeFilter = results.length;
       results = filterByCategory(results, sourceCategory);
       console.log('[API] Category filter:', beforeFilter, '→', results.length, '(', sourceCategory, ')');
+      perfTimings.categoryFilter = Date.now() - catStart;
     }
 
     // Layer 3: Price filtering - remove suspiciously cheap items (likely spare parts)
     if (results.length > 0 && originalPrice) {
+      const priceStart = Date.now();
       const beforePriceFilter = results.length;
       results = filterByPrice(results, originalPrice);
       console.log('[API] Price filter:', beforePriceFilter, '→', results.length, '(min 40% of', originalPrice, ')');
+      perfTimings.priceFilter = Date.now() - priceStart;
     }
 
     // Layer 4 — SNIPER FILTER: Semantic noun-matching relevance
     // Stamps relevanceScore on every surviving item; drops items < 25.
     if (results.length > 0 && q) {
+      const relStart = Date.now();
       const beforeRelevance = results.length;
       const { relevant, droppedCount } = filterByRelevance(results, q, 25);
       console.log(`[API] Relevance filter (Sniper): ${beforeRelevance} → ${relevant.length} (dropped ${droppedCount} irrelevant)`);
       results = relevant;
+      perfTimings.relevanceFilter = Date.now() - relStart;
     }
+
+    perfTimings.totalFiltering = Date.now() - filterStart;
 
     // =====================================================
     // ENRICHMENT & ANALYTICS
     // =====================================================
+    const analyticsStart = Date.now();
     const { enrichedProducts, nicheAnalytics } = analyzeNiche(results, q);
+    perfTimings.analytics = Date.now() - analyticsStart;
 
-    // Final enrichment pass (affiliate links, image normalization, truncation)
-    const finalProducts = enrichProducts(enrichedProducts);
+    // Enforce result limit (max 1000 per spec)
+    const limitedProducts = enrichedProducts.slice(0, limit);
+
+    // Auto-enable minimal mode for large result sets (>500 items)
+    // This ensures payload stays light and processing is fast
+    const useMinimal = minimal || limitedProducts.length > AUTO_MINIMAL_THRESHOLD;
+    if (useMinimal && !minimal) {
+      console.log(`[API] Auto-enabled minimal mode for ${limitedProducts.length} results`);
+    }
+
+    // Final enrichment pass - use minimal mode for speed with large result sets
+    const enrichStart = Date.now();
+    const finalProducts = useMinimal ? enrichMinimal(limitedProducts) : enrichProducts(limitedProducts);
+    perfTimings.enrichment = Date.now() - enrichStart;
 
     const executionTimeMs = Date.now() - executionStart;
     console.log(`[API] Execution Time: ${executionTimeMs}ms for ${finalProducts.length} items (target: <5000ms)`);
+    console.log(`[API] Phase timings:`, perfTimings);
+
+    // Warn if processing exceeded targets
     if (executionTimeMs > 5000) {
       console.warn(`[API] ⚠ SLOW: ${executionTimeMs}ms exceeds 5000ms target for ${finalProducts.length} items`);
+    }
+    if (perfTimings.totalFiltering > PROCESSING_TIME_TARGET) {
+      console.warn(`[API] ⚠ FILTERING SLOW: ${perfTimings.totalFiltering}ms exceeds ${PROCESSING_TIME_TARGET}ms target`);
     }
 
     const responsePayload = {
@@ -395,9 +497,31 @@ module.exports = async function handler(req, res) {
       category: sourceCategory,
       nicheAnalytics,
       executionTimeMs,
+      processingTimeMs: perfTimings.totalFiltering, // Explicit processing time for spec compliance
       cached: false,
-      pagesScanned
+      pagesScanned,
+      limited: limitedProducts.length < enrichedProducts.length ? limit : null
     };
+
+    // JSON Optimization: Minify response for large payloads (500+ products)
+    // Uses short keys (t for title, p for price, etc.) to reduce payload size
+    const useMinified = shouldMinify(finalProducts.length);
+    if (useMinified) {
+      const minifyStart = Date.now();
+      const minifiedPayload = minifyResponse(responsePayload, useMinimal);
+      perfTimings.minification = Date.now() - minifyStart;
+      
+      // Log size savings for monitoring
+      const savings = calculateSavings(responsePayload, minifiedPayload);
+      console.log(`[API] JSON Minification: ${savings.originalBytes} → ${savings.minifiedBytes} bytes (${savings.ratio} saved)`);
+      
+      // Store minified version in cache
+      cache.set(cKey, minifiedPayload);
+      
+      // Return minified JSON with explicit content-type
+      res.setHeader('Content-Type', 'application/json');
+      return res.status(200).send(JSON.stringify(minifiedPayload));
+    }
 
     // Store in cache for 1 hour
     cache.set(cKey, responsePayload);

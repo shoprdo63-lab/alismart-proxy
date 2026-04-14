@@ -164,6 +164,9 @@ function marketPosition(rank, total) {
  * Enrich a batch of products with analytics fields (trustScore, discountPct, etc.)
  * and compute aggregate niche analytics.
  *
+ * OPTIMIZED for speed: Consolidates multiple array passes into single-pass operations
+ * to handle 1,000+ items in under 2 seconds.
+ *
  * @param {Object[]} products - Raw products from API
  * @returns {{ enrichedProducts: Object[], nicheAnalytics: Object }}
  */
@@ -183,72 +186,106 @@ function analyzeNiche(products, query) {
     };
   }
 
-  // Pre-compute numeric prices and discount %
-  const enriched = products.map(p => ({
-    ...p,
-    priceNumeric: parsePrice(p.price),
-    discountPct: calcDiscountPct(p.price, p.originalPrice)
-  }));
+  const count = products.length;
 
-  // Sorted prices for stats
-  const prices = enriched.map(p => p.priceNumeric).filter(p => p > 0).sort((a, b) => a - b);
-  const medianPriceVal = median(prices);
-  const maxSales = Math.max(...enriched.map(p => p.totalSales || 0), 1);
-
-  // Compute trust scores and relevance scores
-  enriched.forEach(p => {
-    p.trustScore = calcTrustScore(p, maxSales, medianPriceVal);
-    if (query && typeof p.relevanceScore === 'undefined') {
-      p.relevanceScore = calcRelevanceScore(query, p.title);
-    }
-  });
-
-  // Sort by trust score descending for market position
-  const sorted = [...enriched].sort((a, b) => b.trustScore - a.trustScore);
-  const rankMap = new Map();
-  sorted.forEach((p, idx) => rankMap.set(p.productId, idx));
-
-  enriched.forEach(p => {
-    const rank = rankMap.get(p.productId) || 0;
-    p.marketPosition = marketPosition(rank, enriched.length);
-  });
-
-  // Find max discount product
-  let maxDiscountProduct = null;
+  // Single-pass: Pre-compute values and collect stats
+  const enriched = new Array(count);
+  const prices = [];
+  let maxSales = 1;
+  let topRatedCount = 0;
+  let lowRatedCount = 0;
+  let totalNicheVolume = 0;
   let maxDiscount = 0;
-  for (const p of enriched) {
-    if (p.discountPct > maxDiscount) {
-      maxDiscount = p.discountPct;
+  let maxDiscountProduct = null;
+
+  for (let i = 0; i < count; i++) {
+    const p = products[i];
+    const priceNumeric = parsePrice(p.price);
+    const discountPct = calcDiscountPct(p.price, p.originalPrice);
+
+    // Track max sales for normalization
+    const sales = p.totalSales || 0;
+    if (sales > maxSales) maxSales = sales;
+
+    // Track price for stats
+    if (priceNumeric > 0) prices.push(priceNumeric);
+
+    // Track ratings for competition index
+    const rating = p.rating;
+    if (typeof rating === 'number') {
+      if (rating >= 4.5) topRatedCount++;
+      else if (rating > 0 && rating < 4.0) lowRatedCount++;
+    }
+
+    totalNicheVolume += sales;
+
+    // Track max discount product
+    if (discountPct > maxDiscount) {
+      maxDiscount = discountPct;
       maxDiscountProduct = {
         productId: p.productId,
         title: p.title,
-        discountPct: p.discountPct,
+        discountPct,
         price: p.price,
         originalPrice: p.originalPrice
       };
     }
+
+    // Pre-compute relevance score if query provided
+    let relevanceScore = p.relevanceScore;
+    if (query && typeof relevanceScore === 'undefined') {
+      relevanceScore = calcRelevanceScore(query, p.title);
+    }
+
+    enriched[i] = {
+      ...p,
+      priceNumeric,
+      discountPct,
+      relevanceScore
+    };
+  }
+
+  // Calculate price stats
+  prices.sort((a, b) => a - b);
+  const medianPriceVal = median(prices);
+  const minPrice = prices.length > 0 ? prices[0] : 0;
+  const maxPrice = prices.length > 0 ? prices[prices.length - 1] : 0;
+  const avgPrice = prices.length > 0
+    ? Math.round((prices.reduce((a, b) => a + b, 0) / prices.length) * 100) / 100
+    : 0;
+
+  // Single-pass: Compute trust scores
+  for (let i = 0; i < count; i++) {
+    enriched[i].trustScore = calcTrustScore(enriched[i], maxSales, medianPriceVal);
+  }
+
+  // Market position: Sort by trust score once (O(n log n)) and assign ranks
+  // Create array of indices sorted by trust score descending
+  const indices = new Array(count);
+  for (let i = 0; i < count; i++) indices[i] = i;
+  indices.sort((a, b) => enriched[b].trustScore - enriched[a].trustScore);
+
+  // Assign market position based on rank
+  for (let rank = 0; rank < count; rank++) {
+    enriched[indices[rank]].marketPosition = marketPosition(rank, count);
   }
 
   // Competition index
-  const topRatedCount = enriched.filter(p => typeof p.rating === 'number' && p.rating >= 4.5).length;
-  const lowRatedCount = enriched.filter(p => typeof p.rating === 'number' && p.rating > 0 && p.rating < 4.0).length;
   const competitionIndex = (topRatedCount + lowRatedCount) > 0
     ? Math.round((topRatedCount / (topRatedCount + lowRatedCount)) * 100) / 100
     : 0;
 
-  const totalNicheVolume = enriched.reduce((sum, p) => sum + (p.totalSales || 0), 0);
-
   const nicheAnalytics = {
-    avgPrice: prices.length > 0 ? Math.round((prices.reduce((a, b) => a + b, 0) / prices.length) * 100) / 100 : 0,
-    minPrice: prices.length > 0 ? prices[0] : 0,
-    maxPrice: prices.length > 0 ? prices[prices.length - 1] : 0,
+    avgPrice,
+    minPrice,
+    maxPrice,
     medianPrice: Math.round(medianPriceVal * 100) / 100,
     maxDiscountProduct,
     totalNicheVolume,
     competitionIndex,
     topRatedCount,
     lowRatedCount,
-    totalAnalyzed: enriched.length
+    totalAnalyzed: count
   };
 
   return { enrichedProducts: enriched, nicheAnalytics };

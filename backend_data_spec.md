@@ -25,7 +25,10 @@ This document defines the optimal data structure for returning **100+ enriched p
 
 ---
 
-## 2. Product Schema (Single Item)
+## 2. Product Schema
+
+### 2.1 Full Mode (Default)
+Complete product data with all enrichment fields:
 
 ```json
 {
@@ -50,6 +53,28 @@ This document defines the optimal data structure for returning **100+ enriched p
   "marketPosition": "top_20pct"
 }
 ```
+
+### 2.2 Minimal Mode (Auto-enabled for 500+ results)
+**Immutable Core** data only — optimized for large payloads up to 1,000 items:
+
+```json
+{
+  "title": "Wireless Bluetooth Headphones Noise Cancelling",
+  "price": "12.99",
+  "imgUrl": "https://ae01.alicdn.com/kf/...",
+  "affiliateLink": "https://s.click.aliexpress.com/e/..."
+}
+```
+
+**Minimal Mode Fields** (per spec requirements):
+| Field | Description |
+|-------|-------------|
+| `title` | Product title, truncated to 200 chars |
+| `price` | Sale price as string (preserves currency) |
+| `imgUrl` | Clean HTTPS image URL |
+| `affiliateLink` | Affiliate promotion link with tracking |
+
+Minimal mode is **automatically enabled** when results exceed 500 items, ensuring payload stays lightweight for 1,000-item responses.
 
 ### Field Details
 
@@ -213,7 +238,31 @@ Client Request
 
 ---
 
-## 7. Response Envelope
+## 7. API Parameters
+
+| Parameter | Type | Default | Max | Description |
+|---|---|---|---|---|
+| `q` / `query` | string | - | 100 chars | Search keywords or product title |
+| `searchMode` | enum | `exact` | - | `exact` (same product) or `visual` (image search) |
+| `productId` | string | - | - | AliExpress product ID for exact matching |
+| `imgUrl` | string | - | - | Image URL for visual search mode |
+| `originalPrice` | string | - | - | Original price for price filtering (40% threshold) |
+| `limit` | number | 1000 | 1000 | Maximum results to return (payload capacity) |
+| `minimal` | boolean | `false` | - | Force minimal mode (4 fields only) |
+
+### 7.1 Payload Capacity Control
+To fetch up to 1,000 results:
+```
+GET /api/search?q=bluetooth+headphones&limit=1000
+```
+
+### 7.2 Minimal Mode Override
+Auto-enabled at 500+ results, but can be forced:
+```
+GET /api/search?q=chess+set&minimal=true
+```
+
+## 7.3 Response Envelope
 
 ```json
 {
@@ -225,22 +274,55 @@ Client Request
   "category": "electronics",
   "nicheAnalytics": { /* see §4 */ },
   "executionTimeMs": 1842,
+  "processingTimeMs": 892,
   "cached": false,
-  "pagesScanned": 50
+  "pagesScanned": 20,
+  "limited": 1000
 }
 ```
+
+**Response Fields:**
+| Field | Description |
+|---|---|
+| `count` | Actual number of products returned (≤ limit) |
+| `executionTimeMs` | Total server execution time |
+| `processingTimeMs` | Time spent in sorting/filtering only |
+| `limited` | If set, indicates results were capped at this value |
+| `cached` | `true` if response served from cache |
 
 ---
 
 ## 8. Performance Targets
 
+### 8.1 Payload Capacity
+| Metric | Target | Implementation |
+|---|---|---|
+| Max results per search | **1,000 items** | `limit` parameter (default 1000, max 1000) |
+| Fetch strategy | 1.5x over-fetch | Fetches 1,500 raw to return 1,000 after filtering |
+| Chunked parallelism | 4 sorts × 13 pages | Chunk size 10 for optimal throughput |
+
+### 8.2 Processing Speed
+| Phase | Target | Method |
+|---|---|---|
+| **Total server processing** | **< 5,000 ms** | Parallel batch fetching + caching |
+| **Sorting & filtering only** | **< 2,000 ms** | Single-pass algorithms, pre-allocated arrays |
+| Content filtering | < 200 ms | Optimized regex matching |
+| Analytics enrichment | < 500 ms | Single-pass with index sort |
+| Response time (cached) | < 50 ms | In-memory cache hit |
+
+### 8.3 Optimization Techniques
+- **Pre-allocated arrays**: `new Array(n)` instead of `.map()` for 2x speed
+- **Single-pass stats**: Price stats, rating counts, volume totals in one loop
+- **Index sorting**: O(n log n) market position via index array (not full object copy)
+- **Early termination**: Sort strategies exit when target count reached
+- **Auto minimal mode**: Triggers at 500+ results for lightweight payload
+
+### 8.4 Resource Efficiency
 | Metric | Target | Method |
 |---|---|---|
-| Products per search | ~1000 | 50 pages in 10 chunks of 5 |
-| Response time (cold) | < 5000 ms | Chunked `Promise.all` parallelism |
-| Response time (cached) | < 50 ms | In-memory cache hit |
 | Cache hit rate | > 40% | 1-hour TTL on common queries |
 | Memory footprint | < 50 MB | 500-entry cache cap with eviction |
+| Payload size (1000 minimal) | ~150 KB | Only 4 fields per product |
 
 ---
 

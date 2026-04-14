@@ -80,7 +80,7 @@ async function getIdsByImage(imageUrl) {
                 'Upgrade-Insecure-Requests': '1',
                 'Cache-Control': 'max-age=0'
             },
-            timeout: 15000,
+            timeout: 10000,
             maxRedirects: 5
         });
 
@@ -213,14 +213,21 @@ async function getProductDetails(productIds) {
 
         console.log('[AliExpress Service] Retrieved details for', products.length, 'products');
 
-        // Structure the response with the required fields
+        // Structure the response with all required fields
         return products.map((item) => ({
             title: item?.product_title || item?.title || '',
             price: item?.sale_price || item?.price || '',
             originalPrice: item?.original_price || '',
             productImage: item?.product_main_image_url || item?.imageUrl || '',
             affiliateLink: item?.promotion_link || item?.product_detail_url || '',
-            productId: item?.product_id || item?.id || ''
+            productId: item?.product_id || item?.id || '',
+            rating: item?.evaluate_rate ? parseFloat(item.evaluate_rate) : null,
+            totalSales: item?.lastest_volume ? parseInt(item.lastest_volume, 10) : 0,
+            discountPct: item?.discount ? parseFloat(item.discount) : 0,
+            commissionRate: item?.commission_rate || '',
+            storeUrl: item?.shop_url || '',
+            shippingCost: item?.shipping_cost || '0',
+            isChoiceItem: item?.is_choice_item === 'Y' || item?.is_choice_item === true || false
         }));
     } catch (error) {
         console.error('[AliExpress Service] Failed to fetch product details');
@@ -250,10 +257,10 @@ async function searchByKeywords(keywords) {
         format: 'json',
         v: '2.0',
         sign_method: 'md5',
-        fields: 'product_id,product_title,product_main_image_url,product_detail_url,sale_price,original_price,promotion_link',
+        fields: 'product_id,product_title,product_main_image_url,product_detail_url,sale_price,original_price,promotion_link,evaluate_rate,lastest_volume,discount,commission_rate,shop_url,shipping_cost,is_choice_item',
         keywords: keywords.trim(),
         page_no: 1,
-        page_size: 20,
+        page_size: 50,
         tracking_id: TRACKING_ID
     };
 
@@ -276,13 +283,21 @@ async function searchByKeywords(keywords) {
 
         console.log('[searchByKeywords] Retrieved', products.length, 'products');
 
+        // Structure the response with all required fields
         return products.map((item) => ({
             title: item?.product_title || item?.title || '',
             price: item?.sale_price || item?.price || '',
             originalPrice: item?.original_price || '',
             productImage: item?.product_main_image_url || item?.imageUrl || '',
             affiliateLink: item?.promotion_link || item?.product_detail_url || '',
-            productId: item?.product_id || item?.id || ''
+            productId: item?.product_id || item?.id || '',
+            rating: item?.evaluate_rate ? parseFloat(item.evaluate_rate) : null,
+            totalSales: item?.lastest_volume ? parseInt(item.lastest_volume, 10) : 0,
+            discountPct: item?.discount ? parseFloat(item.discount) : 0,
+            commissionRate: item?.commission_rate || '',
+            storeUrl: item?.shop_url || '',
+            shippingCost: item?.shipping_cost || '0',
+            isChoiceItem: item?.is_choice_item === 'Y' || item?.is_choice_item === true || false
         }));
     } catch (error) {
         console.error('[searchByKeywords] Error:', error.message);
@@ -312,7 +327,7 @@ async function searchByProductId(productId) {
     format: 'json',
     v: '2.0',
     sign_method: 'md5',
-    fields: 'product_id,product_title,product_main_image_url,product_detail_url,sale_price,original_price,promotion_link',
+    fields: 'product_id,product_title,product_main_image_url,product_detail_url,sale_price,original_price,promotion_link,evaluate_rate,lastest_volume,discount,commission_rate,shop_url,shipping_cost,is_choice_item',
     product_id: productId.trim(),
     page_no: 1,
     page_size: 20,
@@ -344,7 +359,14 @@ async function searchByProductId(productId) {
       originalPrice: item?.original_price || '',
       productImage: item?.product_main_image_url || item?.imageUrl || '',
       affiliateLink: item?.promotion_link || item?.product_detail_url || '',
-      productId: item?.product_id || item?.id || ''
+      productId: item?.product_id || item?.id || '',
+      rating: item?.evaluate_rate ? parseFloat(item.evaluate_rate) : null,
+      totalSales: item?.lastest_volume ? parseInt(item.lastest_volume, 10) : 0,
+      discountPct: item?.discount ? parseFloat(item.discount) : 0,
+      commissionRate: item?.commission_rate || '',
+      storeUrl: item?.shop_url || '',
+      shippingCost: item?.shipping_cost || '0',
+      isChoiceItem: item?.is_choice_item === 'Y' || item?.is_choice_item === true || false
     }));
   } catch (error) {
     console.error('[searchByProductId] Error:', error.message);
@@ -371,10 +393,10 @@ async function searchByKeywordsPage(keywords, pageNo = 1, sort = '') {
         format: 'json',
         v: '2.0',
         sign_method: 'md5',
-        fields: 'product_id,product_title,product_main_image_url,product_detail_url,sale_price,original_price,promotion_link,evaluate_rate,lastest_volume,discount,commission_rate,shop_url',
+        fields: 'product_id,product_title,product_main_image_url,product_detail_url,sale_price,original_price,promotion_link,evaluate_rate,lastest_volume,discount,commission_rate,shop_url,shipping_cost,is_choice_item',
         keywords: keywords.trim(),
         page_no: pageNo,
-        page_size: 20,
+        page_size: 50,
         tracking_id: TRACKING_ID
     };
 
@@ -407,9 +429,11 @@ async function searchByKeywordsPage(keywords, pageNo = 1, sort = '') {
             productId: item?.product_id || item?.id || '',
             rating: item?.evaluate_rate ? parseFloat(item.evaluate_rate) : null,
             totalSales: item?.lastest_volume ? parseInt(item.lastest_volume, 10) : 0,
-            discount: item?.discount || '',
+            discountPct: item?.discount ? parseFloat(item.discount) : 0,
             commissionRate: item?.commission_rate || '',
-            storeUrl: item?.shop_url || ''
+            storeUrl: item?.shop_url || '',
+            shippingCost: item?.shipping_cost || '0',
+            isChoiceItem: item?.is_choice_item === 'Y' || item?.is_choice_item === true || false
         }));
     } catch (error) {
         console.error(`[searchByKeywordsPage] Page ${pageNo} error:`, error.message);
@@ -489,37 +513,44 @@ async function fetchSortedBatch(keywords, sort, maxPages, chunkSize, seen, allPr
     return totalNew;
 }
 
-async function searchByKeywordsBatch(keywords, totalPages = 50, chunkSize = 5) {
+/**
+ * Optimized batch search targeting exactly 1,000 unique results.
+ * Uses aggressive parallelization with chunked concurrency.
+ * @param {string} keywords - Search keywords
+ * @param {number} targetCount - Target number of unique products (default: 1000)
+ * @param {number} chunkSize - Concurrent requests per wave (default: 10 for speed)
+ * @returns {Promise<Object[]>} Array of unique product details
+ */
+async function searchByKeywordsBatch(keywords, targetCount = 1000, chunkSize = 10) {
     if (!keywords || !keywords.trim()) {
         console.error('[searchByKeywordsBatch] No keywords provided');
         return [];
     }
 
-    const TARGET_COUNT = 1500;
-    const pagesPerSort = Math.min(Math.ceil(totalPages / SORT_STRATEGIES.length), 20);
-    const effectiveChunkSize = Math.max(chunkSize, 5);
+    // Calculate pages per sort to reach target efficiently
+    // Each page returns ~20 products, but with dedup we need more
+    // Target: 1000 products / 4 sorts = ~250 per sort / ~20 per page = ~13 pages per sort
+    const pagesPerSort = Math.min(Math.ceil((targetCount * 1.5) / SORT_STRATEGIES.length / 20), 25);
+    const effectiveChunkSize = Math.min(Math.max(chunkSize, 8), 15); // Clamp between 8-15 for optimal speed
 
-    console.log(`[searchByKeywordsBatch] Multi-sort extraction: ${SORT_STRATEGIES.length} sorts × ${pagesPerSort} pages (chunks of ${effectiveChunkSize}) for: "${keywords}"`);
+    console.log(`[searchByKeywordsBatch] Target: ${targetCount} products | ${SORT_STRATEGIES.length} sorts × ${pagesPerSort} pages | chunks of ${effectiveChunkSize}`);
     const startTime = Date.now();
 
     const seen = new Set();
     const allProducts = [];
 
-    // Run ALL sort strategies in parallel — each sort internally chunks + early-exits
-    // when the shared allProducts array hits TARGET_COUNT.
-    // 4 sorts × 10 pages × chunkSize=8 → first wave: up to 32 concurrent requests,
-    // then target-aware exit stops remaining sorts once we hit ~1000.
+    // Run ALL sort strategies in parallel with early exit when target reached
     const sortLabels = SORT_STRATEGIES.map(s => s || 'DEFAULT').join(', ');
-    console.log(`[searchByKeywordsBatch] Parallel blast: [${sortLabels}]`);
+    console.log(`[searchByKeywordsBatch] Parallel strategies: [${sortLabels}]`);
 
     await Promise.all(
         SORT_STRATEGIES.map(sort =>
-            fetchSortedBatch(keywords, sort, pagesPerSort, effectiveChunkSize, seen, allProducts, TARGET_COUNT)
+            fetchSortedBatch(keywords, sort, pagesPerSort, effectiveChunkSize, seen, allProducts, targetCount)
         )
     );
 
     const elapsed = Date.now() - startTime;
-    console.log(`[searchByKeywordsBatch] DONE: ${allProducts.length} unique products via parallel sort pairs in ${elapsed}ms`);
+    console.log(`[searchByKeywordsBatch] DONE: ${allProducts.length} unique products in ${elapsed}ms (target: ${targetCount})`);
 
     return allProducts;
 }
