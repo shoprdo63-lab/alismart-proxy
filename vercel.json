@@ -5,6 +5,7 @@
   ],
   "routes": [
     { "src": "/api/search", "dest": "/api/search.js" },
+    { "src": "/api/massive-search", "dest": "/api/massive-search.js" },
     { "src": "/api/optimizer/batch-lookup", "dest": "/api/optimizer/batch-lookup.js" },
     { "src": "/api/optimizer/bundles", "dest": "/api/optimizer/bundles.js" }
   ]

@@ -21,7 +21,7 @@ const KEY_MAP = {
   priceNumeric: 'pn',
   currency: 'c',
   discountPct: 'd',
-  productUrl: 'u',
+  itemUrl: 'u',
   rating: 'r',
   totalSales: 's',
   trustScore: 'ts',

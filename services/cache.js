@@ -3,12 +3,16 @@
  * Redis-ready interface — swap implementation by replacing get/set/del methods.
  */
 
-const DEFAULT_TTL_MS = 60 * 60 * 1000; // 1 hour
-const MAX_ENTRIES = 500;
-const SWEEP_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours - aggressive caching
+const MAX_ENTRIES = 2000; // Increased from 500 for more cache capacity
+const SWEEP_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes - less frequent sweeps
 
 /** @type {Map<string, { value: any, expiresAt: number }>} */
 const store = new Map();
+
+// Cache statistics
+let hits = 0;
+let misses = 0;
 
 /**
  * Periodic eviction of expired entries
@@ -70,11 +74,16 @@ function cacheKey(prefix, mode, query) {
  */
 function get(key) {
   const entry = store.get(key);
-  if (!entry) return null;
-  if (entry.expiresAt <= Date.now()) {
-    store.delete(key);
+  if (!entry) {
+    misses++;
     return null;
   }
+  if (entry.expiresAt <= Date.now()) {
+    store.delete(key);
+    misses++;
+    return null;
+  }
+  hits++;
   return entry.value;
 }
 
@@ -105,11 +114,20 @@ function del(key) {
  * @returns {{ size: number, maxEntries: number, ttlMinutes: number }}
  */
 function stats() {
+  const total = hits + misses;
   return {
     size: store.size,
     maxEntries: MAX_ENTRIES,
-    ttlMinutes: DEFAULT_TTL_MS / 60000
+    ttlMinutes: DEFAULT_TTL_MS / 60000,
+    hits,
+    misses,
+    hitRate: total > 0 ? ((hits / total) * 100).toFixed(2) + '%' : '0%'
   };
 }
 
-module.exports = { cacheKey, get, set, del, stats };
+function resetStats() {
+  hits = 0;
+  misses = 0;
+}
+
+module.exports = { cacheKey, get, set, del, stats, resetStats };

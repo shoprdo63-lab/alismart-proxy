@@ -205,7 +205,7 @@ async function getProductDetails(productIds) {
             headers: {
                 'Accept': 'application/json'
             },
-            timeout: 10000
+            timeout: 20000 // Increased from 10s to 20s for better reliability
         });
 
         const data = response.data;
@@ -219,13 +219,15 @@ async function getProductDetails(productIds) {
             price: item?.sale_price || item?.price || '',
             originalPrice: item?.original_price || '',
             productImage: item?.product_main_image_url || item?.imageUrl || '',
-            affiliateLink: item?.promotion_link || item?.product_detail_url || '',
+            affiliateLink: item?.promotion_link || '',
+            itemUrl: item?.product_detail_url || '',
             productId: item?.product_id || item?.id || '',
             rating: item?.evaluate_rate ? parseFloat(item.evaluate_rate) : null,
             totalSales: item?.lastest_volume ? parseInt(item.lastest_volume, 10) : 0,
             discountPct: item?.discount ? parseFloat(item.discount) : 0,
             commissionRate: item?.commission_rate || '',
             storeUrl: item?.shop_url || '',
+            storeName: item?.store_name || '',
             shippingCost: item?.shipping_cost || '0',
             isChoiceItem: item?.is_choice_item === 'Y' || item?.is_choice_item === true || false,
             packageWeight: item?.package_weight ? parseFloat(item.package_weight) : null,
@@ -291,13 +293,15 @@ async function searchByKeywords(keywords) {
             price: item?.sale_price || item?.price || '',
             originalPrice: item?.original_price || '',
             productImage: item?.product_main_image_url || item?.imageUrl || '',
-            affiliateLink: item?.promotion_link || item?.product_detail_url || '',
+            affiliateLink: item?.promotion_link || '',
+            itemUrl: item?.product_detail_url || '',
             productId: item?.product_id || item?.id || '',
             rating: item?.evaluate_rate ? parseFloat(item.evaluate_rate) : null,
             totalSales: item?.lastest_volume ? parseInt(item.lastest_volume, 10) : 0,
             discountPct: item?.discount ? parseFloat(item.discount) : 0,
             commissionRate: item?.commission_rate || '',
             storeUrl: item?.shop_url || '',
+            storeName: item?.store_name || '',
             shippingCost: item?.shipping_cost || '0',
             isChoiceItem: item?.is_choice_item === 'Y' || item?.is_choice_item === true || false,
             packageWeight: item?.package_weight ? parseFloat(item.package_weight) : null,
@@ -362,13 +366,15 @@ async function searchByProductId(productId) {
       price: item?.sale_price || item?.price || '',
       originalPrice: item?.original_price || '',
       productImage: item?.product_main_image_url || item?.imageUrl || '',
-      affiliateLink: item?.promotion_link || item?.product_detail_url || '',
+      affiliateLink: item?.promotion_link || '',
+      itemUrl: item?.product_detail_url || '',
       productId: item?.product_id || item?.id || '',
       rating: item?.evaluate_rate ? parseFloat(item.evaluate_rate) : null,
       totalSales: item?.lastest_volume ? parseInt(item.lastest_volume, 10) : 0,
       discountPct: item?.discount ? parseFloat(item.discount) : 0,
       commissionRate: item?.commission_rate || '',
       storeUrl: item?.shop_url || '',
+      storeName: item?.store_name || '',
       shippingCost: item?.shipping_cost || '0',
       isChoiceItem: item?.is_choice_item === 'Y' || item?.is_choice_item === true || false,
       packageWeight: item?.package_weight ? parseFloat(item.package_weight) : null,
@@ -402,7 +408,7 @@ async function searchByKeywordsPage(keywords, pageNo = 1, sort = '') {
         fields: 'product_id,product_title,product_main_image_url,product_detail_url,sale_price,original_price,promotion_link,evaluate_rate,lastest_volume,discount,commission_rate,shop_url,shipping_cost,is_choice_item',
         keywords: keywords.trim(),
         page_no: pageNo,
-        page_size: 50,
+        page_size: 100, // Maximum page size for maximum products per request
         tracking_id: TRACKING_ID
     };
 
@@ -420,7 +426,7 @@ async function searchByKeywordsPage(keywords, pageNo = 1, sort = '') {
     try {
         const response = await axios.get(`${API_URL}?${queryString}`, {
             headers: { 'Accept': 'application/json' },
-            timeout: 10000
+            timeout: 15000 // Increased from 10s to 15s for better reliability
         });
 
         const data = response.data;
@@ -431,13 +437,15 @@ async function searchByKeywordsPage(keywords, pageNo = 1, sort = '') {
             price: item?.sale_price || item?.price || '',
             originalPrice: item?.original_price || '',
             productImage: item?.product_main_image_url || item?.imageUrl || '',
-            affiliateLink: item?.promotion_link || item?.product_detail_url || '',
+            affiliateLink: item?.promotion_link || '',
+            itemUrl: item?.product_detail_url || '',
             productId: item?.product_id || item?.id || '',
             rating: item?.evaluate_rate ? parseFloat(item.evaluate_rate) : null,
             totalSales: item?.lastest_volume ? parseInt(item.lastest_volume, 10) : 0,
             discountPct: item?.discount ? parseFloat(item.discount) : 0,
             commissionRate: item?.commission_rate || '',
             storeUrl: item?.shop_url || '',
+            storeName: item?.store_name || '',
             shippingCost: item?.shipping_cost || '0',
             isChoiceItem: item?.is_choice_item === 'Y' || item?.is_choice_item === true || false,
             packageWeight: item?.package_weight ? parseFloat(item.package_weight) : null,
@@ -458,7 +466,8 @@ const SORT_STRATEGIES = [
     'LAST_VOLUME_DESC',   // Most sold first
     'SALE_PRICE_ASC',     // Cheapest first
     'SALE_PRICE_DESC',    // Most expensive first
-    'EVALUATE_RATE_DESC'  // Top rated first — surfaces high-quality items from different sellers
+    'EVALUATE_RATE_DESC', // Top rated first — surfaces high-quality items from different sellers
+    'NEWEST_DESC'         // Newest products first — surfaces fresh inventory
 ];
 
 /**
@@ -507,11 +516,12 @@ async function fetchSortedBatch(keywords, sort, maxPages, chunkSize, seen, allPr
         totalNew += chunkNewCount;
         console.log(`  [${sortLabel}] pages ${chunkStart}-${chunkEnd}: +${chunkNewCount} new (${allProducts.length} total)`);
 
-        // Aggressive early termination: stop this sort if chunk yields < 3 new products
-        if (chunkNewCount < 3) {
+        // Very relaxed early termination: only stop after 5 consecutive zero-yield chunks
+        // Continue fetching aggressively to maximize raw pool for quality selection
+        if (chunkNewCount === 0) {
             lowYieldChunks++;
-            if (lowYieldChunks >= 2) {
-                console.log(`  [${sortLabel}] Early exit: low yield (${chunkNewCount} new in last chunk)`);
+            if (lowYieldChunks >= 5) {
+                console.log(`  [${sortLabel}] Early exit: 5 consecutive zero-yield chunks`);
                 break;
             }
         } else {
@@ -527,20 +537,21 @@ async function fetchSortedBatch(keywords, sort, maxPages, chunkSize, seen, allPr
  * Uses aggressive parallelization with chunked concurrency.
  * @param {string} keywords - Search keywords
  * @param {number} targetCount - Target number of unique products (default: 1000)
- * @param {number} chunkSize - Concurrent requests per wave (default: 10 for speed)
+ * @param {number} chunkSize - Concurrent requests per wave (default: 15 for speed)
  * @returns {Promise<Object[]>} Array of unique product details
  */
-async function searchByKeywordsBatch(keywords, targetCount = 1000, chunkSize = 10) {
+async function searchByKeywordsBatch(keywords, targetCount = 1000, chunkSize = 15) {
     if (!keywords || !keywords.trim()) {
         console.error('[searchByKeywordsBatch] No keywords provided');
         return [];
     }
 
     // Calculate pages per sort to reach target efficiently
-    // Each page returns ~20 products, but with dedup we need more
-    // Target: 1000 products / 4 sorts = ~250 per sort / ~20 per page = ~13 pages per sort
-    const pagesPerSort = Math.min(Math.ceil((targetCount * 1.5) / SORT_STRATEGIES.length / 20), 25);
-    const effectiveChunkSize = Math.min(Math.max(chunkSize, 8), 15); // Clamp between 8-15 for optimal speed
+    // Each page returns ~100 products, but with dedup we need more
+    // Target: 1000 products / 6 sorts = ~167 per sort / ~50 per page after dedup = ~4 pages per sort
+    // Using up to 100 pages per sort for maximum coverage (6000+ potential unique products)
+    const pagesPerSort = Math.min(Math.ceil((targetCount * 2) / SORT_STRATEGIES.length / 40), 100);
+    const effectiveChunkSize = Math.min(Math.max(chunkSize, 12), 20); // Increased to 12-20 for faster retrieval
 
     console.log(`[searchByKeywordsBatch] Target: ${targetCount} products | ${SORT_STRATEGIES.length} sorts × ${pagesPerSort} pages | chunks of ${effectiveChunkSize}`);
     const startTime = Date.now();

@@ -5,12 +5,17 @@ const { filterProducts } = require('../services/content-filter.js');
 const { deduplicateProducts, fastDeduplicate } = require('../services/deduplication.js');
 const { minifyResponse, shouldMinify, calculateSavings } = require('../services/json-minify.js');
 
+// AliExpress Massive Search System
+const { fetchMassivePool } = require('../services/aliexpress-massive.js');
+const { scoreProductPool } = require('../services/aliexpress-scoring.js');
+const { selectTopProducts } = require('../services/smart-selection.js');
+
 const AFFILIATE_ID = process.env.ALI_TRACKING_ID || 'ali_smart_finder_v1';
 const MAX_QUERY_LENGTH = 100;
 const MAX_RESULTS = 1000; // Maximum payload capacity per spec
 const AUTO_MINIMAL_THRESHOLD = 500; // Auto-enable minimal mode for large result sets
 const PROCESSING_TIME_TARGET = 2000; // 2 second target for filtering/sorting
-const MAX_PER_STORE = 3; // Anti-monopoly: max items from a single store
+const MAX_PER_STORE = 10; // Relaxed anti-monopoly: max items from a single store
 
 // Category keywords for filtering
 const CATEGORY_KEYWORDS = {
@@ -44,14 +49,24 @@ function detectCategory(text) {
 
 /**
  * Smart Clean: Strip adjectives and structure words, keep only product essence.
+ * Prioritizes English keywords from Hebrew queries.
  * "32Pcs Set Wooden Table Chess..." → "Wooden Chess"
+ * "משחק שחמט עץ Chess Game" → "chess wood"
  */
 function smartClean(query) {
   if (!query || typeof query !== 'string') return '';
 
   let cleaned = query;
 
-  // STEP 0: Strip ALL non-Latin scripts (Hebrew, Arabic, Chinese, Cyrillic, etc.)
+  // STEP 0: Extract and preserve English words first (before Hebrew removal)
+  const englishWords = [];
+  const englishWordRegex = /\b[a-zA-Z]{3,}\b/g;
+  let match;
+  while ((match = englishWordRegex.exec(query)) !== null) {
+    englishWords.push(match[0].toLowerCase());
+  }
+
+  // STEP 1: Strip ALL non-Latin scripts (Hebrew, Arabic, Chinese, Cyrillic, etc.)
   // This removes UI text like "מלאי מצומצם", price labels, and RTL noise
   cleaned = cleaned.replace(/[\u0590-\u05FF]/g, ' ');  // Hebrew
   cleaned = cleaned.replace(/[\u0600-\u06FF]/g, ' ');  // Arabic
@@ -60,28 +75,28 @@ function smartClean(query) {
   cleaned = cleaned.replace(/[\u3040-\u30FF]/g, ' ');  // Japanese
   cleaned = cleaned.replace(/[\uAC00-\uD7AF]/g, ' ');  // Korean
 
-  // STEP 0b: Remove price tags and currency patterns (e.g., "$12.99", "US $5.00", "₪39.90", "EUR 10")
+  // STEP 1b: Remove price tags and currency patterns (e.g., "$12.99", "US $5.00", "₪39.90", "EUR 10")
   cleaned = cleaned.replace(/[₪$€£¥]\s*\d+[.,]?\d*/g, ' ');
   cleaned = cleaned.replace(/\b(USD|EUR|GBP|ILS|CNY|US\s*\$)\s*\d+[.,]?\d*/gi, ' ');
   cleaned = cleaned.replace(/\d+[.,]?\d*\s*[₪$€£¥]/g, ' ');
 
-  // STEP 0c: Remove dimension/spec patterns (e.g., "100x200cm", "5V/2A", "250ml")
+  // STEP 1c: Remove dimension/spec patterns (e.g., "100x200cm", "5V/2A", "250ml")
   cleaned = cleaned.replace(/\b\d+(\.\d+)?\s*x\s*\d+(\.\d+)?\s*(cm|mm|m|inch|in)?\b/gi, ' ');
   cleaned = cleaned.replace(/\b\d+(\.\d+)?\s*(cm|mm|m|kg|g|lb|oz|ml|l|v|w|a|mah|inch|in)\b/gi, ' ');
   cleaned = cleaned.replace(/\b\d+\s*\/\s*\d+\s*(v|a|w)\b/gi, ' ');
 
   cleaned = cleaned.toLowerCase();
 
-  // STEP 1: Remove quantity patterns (e.g., "32pcs", "30pcs", "100pcs")
+  // STEP 2: Remove quantity patterns (e.g., "32pcs", "30pcs", "100pcs")
   cleaned = cleaned.replace(/\b\d+\s*(pcs|pc|pieces|piece|units|unit|items|item|packs|pack|sets|set)\b/gi, ' ');
 
-  // STEP 2: Remove standalone numbers
+  // STEP 3: Remove standalone numbers
   cleaned = cleaned.replace(/\b\d+\b/g, ' ');
 
-  // STEP 3: Remove "X in 1" patterns
+  // STEP 4: Remove "X in 1" patterns
   cleaned = cleaned.replace(/\b\d+\s*in\s*\d+\b/gi, ' ');
 
-  // STEP 4: Words to remove - adjectives + structure words
+  // STEP 5: Words to remove - adjectives + structure words
   const noiseWords = [
     // Adjectives - marketing fluff
     'new', 'luxury', 'premium', 'high', 'quality', 'best', 'top',
@@ -120,7 +135,7 @@ function smartClean(query) {
     cleaned = cleaned.replace(new RegExp(`\\b${word}\\b`, 'gi'), ' ');
   }
 
-  // STEP 5: Remove common table/furniture structure words when paired with product
+  // STEP 6: Remove common table/furniture structure words when paired with product
   cleaned = cleaned.replace(/\btable\s+(game|board|top|chess)\b/gi, '$1');
 
   // Clean up multiple spaces and trim
@@ -129,7 +144,18 @@ function smartClean(query) {
   // Get meaningful words (3+ chars)
   const words = cleaned.split(' ').filter(w => w.length >= 3);
 
-  // If too few words, fallback to original first 3 meaningful words (Latin only)
+  // PRIORITY: If we found English words in the original query, prioritize them
+  // This ensures English keywords from Hebrew queries are preserved
+  if (englishWords.length > 0) {
+    const uniqueEnglishWords = [...new Set(englishWords)].filter(w => w.length >= 3);
+    // Remove noise words from English words too
+    const filteredEnglish = uniqueEnglishWords.filter(w => !noiseWords.includes(w.toLowerCase()));
+    if (filteredEnglish.length >= 2) {
+      return filteredEnglish.slice(0, 4).join(' ');
+    }
+  }
+
+  // Fallback: If too few words, use original first 3 meaningful words (Latin only)
   if (words.length < 2) {
     const originalWords = query.toLowerCase()
       .replace(/[^\x20-\x7E]/g, ' ')  // Keep only basic Latin/ASCII
@@ -174,6 +200,127 @@ function extractPrice(priceStr) {
   if (!priceStr) return 0;
   const match = String(priceStr).match(/[\d,]+\.?\d*/);
   return match ? parseFloat(match[0].replace(/,/g, '')) : 0;
+}
+
+/**
+ * Calculate Priority Score for a product
+ * Higher score = better deal (lower price, higher rating, more sales)
+ * Formula: (Rating * 20) + (Sales / 1000) + (100 / Price)
+ * This gives:
+ * - Rating: 0-100 points (5 stars = 100 points)
+ * - Sales: 0-100 points (100,000 sales = 100 points)
+ * - Price: 0-100 points (lower price = higher score, $1 = 100 points, $100 = 1 point)
+ */
+function calculatePriorityScore(product) {
+  const rating = product.rating || 0;
+  const sales = product.totalSales || 0;
+  const price = extractPrice(product.price) || 1; // Avoid division by zero
+
+  // Normalize rating to 0-100 scale (assuming max 5 stars)
+  const ratingScore = Math.min(rating * 20, 100);
+
+  // Normalize sales to 0-100 scale (assuming 100,000 sales = 100 points)
+  const salesScore = Math.min(sales / 1000, 100);
+
+  // Normalize price to 0-100 scale (inverse relationship - lower price = higher score)
+  // Using log scale for better distribution: score = 100 - (log10(price) * 20)
+  const priceScore = Math.max(0, Math.min(100, 100 - (Math.log10(price) * 20)));
+
+  // Weighted combination: Rating (40%), Sales (30%), Price (30%)
+  const priorityScore = (ratingScore * 0.4) + (salesScore * 0.3) + (priceScore * 0.3);
+
+  return Math.round(priorityScore * 100) / 100; // Round to 2 decimal places
+}
+
+/**
+ * Smart Select Top 1000 Products
+ * Selects the best 1000 products from a large pool using multi-tier strategy:
+ * - Tier 1: Top 300 by relevance (ensures high similarity to query)
+ * - Tier 2: Next 400 by composite quality score (best deals)
+ * - Tier 3: 300 diverse picks (ensures store/category variety)
+ */
+function selectTopProducts(products, targetCount = 1000) {
+  if (!Array.isArray(products) || products.length <= targetCount) {
+    return products;
+  }
+
+  const totalAvailable = products.length;
+  console.log(`[API] Smart Select: ${totalAvailable} candidates → selecting top ${targetCount}`);
+
+  // Calculate composite score for each product
+  const scoredProducts = products.map(product => {
+    const relevanceScore = product.relevanceScore || 0;
+    const rating = product.rating || 0;
+    const sales = product.totalSales || 0;
+    const price = extractPrice(product.price) || 1;
+    const hasDiscount = product.discountPct > 0;
+    const isChoice = product.isChoiceItem;
+    const priorityScore = product.priorityScore || 0;
+
+    // Composite quality score (independent of relevance)
+    const qualityScore = 
+      (rating * 15) +                    // Rating: up to 75 points (5 stars)
+      (Math.min(sales, 5000) / 5000 * 25) + // Sales: up to 25 points (capped at 5000)
+      (hasDiscount ? 5 : 0) +            // Discount bonus
+      (isChoice ? 3 : 0) +                 // Choice item bonus
+      (priorityScore * 0.5);              // Priority score contribution
+
+    return {
+      ...product,
+      qualityScore: Math.round(qualityScore * 100) / 100,
+      compositeScore: Math.round((relevanceScore * 0.6 + qualityScore * 0.4) * 100) / 100
+    };
+  });
+
+  // Tier 1: Top 300 by relevance (ensures query similarity)
+  const sortedByRelevance = [...scoredProducts].sort((a, b) => (b.relevanceScore || 0) - (a.relevanceScore || 0));
+  const tier1 = sortedByRelevance.slice(0, 300);
+  const tier1Ids = new Set(tier1.map(p => p.productId));
+
+  // Tier 2: Next 400 by quality score from remaining products
+  const remainingAfterTier1 = scoredProducts.filter(p => !tier1Ids.has(p.productId));
+  const sortedByQuality = remainingAfterTier1.sort((a, b) => b.qualityScore - a.qualityScore);
+  const tier2 = sortedByQuality.slice(0, 400);
+  const tier2Ids = new Set(tier2.map(p => p.productId));
+
+  // Tier 3: 300 diverse picks from remaining (mix of composite score + diversity)
+  const remainingAfterTier2 = scoredProducts.filter(p => !tier1Ids.has(p.productId) && !tier2Ids.has(p.productId));
+  
+  // Ensure diversity: limit to 2 per store in tier 3
+  const storeCounts = new Map();
+  const tier3 = [];
+  
+  // Sort remaining by composite score for selection
+  const sortedByComposite = remainingAfterTier2.sort((a, b) => b.compositeScore - a.compositeScore);
+  
+  for (const product of sortedByComposite) {
+    const storeId = product.storeUrl || product.storeName || 'unknown';
+    const currentCount = storeCounts.get(storeId) || 0;
+    
+    if (currentCount < 2) {
+      tier3.push(product);
+      storeCounts.set(storeId, currentCount + 1);
+    }
+    
+    if (tier3.length >= 300) break;
+  }
+
+  // If we don't have 300 in tier3, fill with best remaining
+  if (tier3.length < 300) {
+    const tier3Ids = new Set(tier3.map(p => p.productId));
+    const remaining = sortedByComposite.filter(p => !tier1Ids.has(p.productId) && !tier2Ids.has(p.productId) && !tier3Ids.has(p.productId));
+    const needed = 300 - tier3.length;
+    tier3.push(...remaining.slice(0, needed));
+  }
+
+  // Combine all tiers
+  const selected = [...tier1, ...tier2, ...tier3].slice(0, targetCount);
+
+  console.log(`[API] Selection breakdown: Tier 1 (relevance): ${tier1.length}, Tier 2 (quality): ${tier2.length}, Tier 3 (diverse): ${tier3.length}`);
+  console.log(`[API] Final selection: ${selected.length} products (from ${totalAvailable} candidates)`);
+
+  // Sort final result by composite score for presentation
+  return selected.sort((a, b) => b.compositeScore - a.compositeScore);
 }
 
 /**
@@ -293,6 +440,9 @@ function enrichProducts(products) {
     const shippingCost = product.shippingCost || '0';
     const shippingCostNum = parseFloat(String(shippingCost).replace(/[^\d.]/g, '')) || 0;
 
+    // Calculate priority score
+    const priorityScore = calculatePriorityScore(product);
+
     return {
       productId: String(product.productId || ''),
       title: String(product.title || '').substring(0, 200),
@@ -314,7 +464,9 @@ function enrichProducts(products) {
       relevanceScore: product.relevanceScore || 0,
       marketPosition: product.marketPosition || 'mid',
       shippingCost: shippingCostNum,
-      isChoiceItem: product.isChoiceItem || false
+      isChoiceItem: product.isChoiceItem || false,
+      itemUrl: String(product.itemUrl || ''),
+      priorityScore: priorityScore
     };
   });
 }
@@ -341,6 +493,9 @@ function enrichMinimal(products) {
     const shippingCost = product.shippingCost || '0';
     const shippingCostNum = parseFloat(String(shippingCost).replace(/[^\d.]/g, '')) || 0;
 
+    // Calculate priority score (even in minimal mode for sorting)
+    const priorityScore = calculatePriorityScore(product);
+
     // Immutable Core + Enrichment Fields (per spec §2)
     result[i] = {
       title: String(product.title || '').substring(0, 200),
@@ -349,7 +504,9 @@ function enrichMinimal(products) {
       affiliateLink: String(product.affiliateLink || finalUrl || ''),
       discountPct: product.discountPct || 0,
       shippingCost: shippingCostNum,
-      isChoiceItem: product.isChoiceItem || false
+      isChoiceItem: product.isChoiceItem || false,
+      itemUrl: String(product.itemUrl || ''),
+      priorityScore: priorityScore
     };
   }
 
@@ -529,11 +686,11 @@ module.exports = async function handler(req, res) {
     }
 
     // Layer 4 — SNIPER FILTER: Semantic noun-matching relevance
-    // Stamps relevanceScore on every surviving item; drops items < 25.
+    // Stamps relevanceScore on every surviving item; drops items < 10.
     if (results.length > 0 && q) {
       const relStart = Date.now();
       const beforeRelevance = results.length;
-      const { relevant, droppedCount } = filterByRelevance(results, q, 25);
+      const { relevant, droppedCount } = filterByRelevance(results, q, 10);
       console.log(`[API] Relevance filter (Sniper): ${beforeRelevance} → ${relevant.length} (dropped ${droppedCount} irrelevant)`);
       results = relevant;
       perfTimings.relevanceFilter = Date.now() - relStart;
@@ -559,8 +716,9 @@ module.exports = async function handler(req, res) {
     const { enrichedProducts, nicheAnalytics } = analyzeNiche(results, q);
     perfTimings.analytics = Date.now() - analyticsStart;
 
-    // Enforce result limit (max 1000 per spec)
-    const limitedProducts = enrichedProducts.slice(0, limit);
+    // Smart selection: Pick top 1000 products from pool using multi-tier strategy
+    // This ensures we get the highest quality, most relevant products
+    const limitedProducts = selectTopProducts(enrichedProducts, limit);
 
     // Auto-enable minimal mode for large result sets (>500 items)
     // This ensures payload stays light and processing is fast
@@ -595,10 +753,16 @@ module.exports = async function handler(req, res) {
       category: sourceCategory,
       nicheAnalytics,
       executionTimeMs,
-      processingTimeMs: perfTimings.totalFiltering, // Explicit processing time for spec compliance
+      processingTimeMs: perfTimings.totalFiltering,
       cached: false,
       pagesScanned,
-      limited: limitedProducts.length < enrichedProducts.length ? limit : null
+      poolSize: enrichedProducts.length, // Total candidates before smart selection
+      limited: enrichedProducts.length > limit ? limit : null,
+      selectionQuality: finalProducts.length > 0 ? {
+        avgCompositeScore: Math.round(finalProducts.reduce((sum, p) => sum + (p.compositeScore || 0), 0) / finalProducts.length * 100) / 100,
+        avgRelevanceScore: Math.round(finalProducts.reduce((sum, p) => sum + (p.relevanceScore || 0), 0) / finalProducts.length * 100) / 100,
+        avgQualityScore: Math.round(finalProducts.reduce((sum, p) => sum + (p.qualityScore || 0), 0) / finalProducts.length * 100) / 100
+      } : null
     };
 
     // JSON Optimization: Minify response for large payloads (500+ products)
@@ -634,6 +798,124 @@ module.exports = async function handler(req, res) {
       data: [],
       count: 0,
       error: 'Search failed silently'
+    });
+  }
+};
+
+/**
+ * MASSIVE SEARCH HANDLER
+ * AliExpress-only: 100K pool → Top 1K selection
+ * Professional sourcing intelligence
+ */
+exports.massiveSearchHandler = async (req, res) => {
+  applyCORS(res);
+  if (req.method === 'OPTIONS') return res.status(200).end();
+
+  const executionStart = Date.now();
+  const { q, limit = 1000, poolSize = 100000 } = req.query;
+
+  if (!q || !q.trim()) {
+    return res.status(400).json({
+      success: false,
+      error: 'Query parameter "q" is required'
+    });
+  }
+
+  const cacheKey = `massive:${q}:${poolSize}:${limit}`;
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    console.log('[Massive Search] Cache hit for:', q);
+    return res.status(200).json({ ...cached, cached: true });
+  }
+
+  try {
+    console.log('\n🚀 ============================================');
+    console.log(`🚀 MASSIVE SEARCH STARTED: "${q}"`);
+    console.log(`🚀 Pool Target: ${poolSize} | Final Target: ${limit}`);
+    console.log('🚀 ============================================\n');
+
+    // Stage 1: Fetch massive pool from AliExpress
+    console.log('[Stage 1/4] Fetching massive pool...');
+    const poolStart = Date.now();
+    const rawPool = await fetchMassivePool(q, parseInt(poolSize));
+    const poolTime = Date.now() - poolStart;
+    
+    console.log(`✅ Pool fetched: ${rawPool.length} products in ${Math.round(poolTime/1000)}s\n`);
+
+    // Stage 2: Score all products
+    console.log('[Stage 2/4] Scoring product pool...');
+    const scoreStart = Date.now();
+    const scoredPool = scoreProductPool(rawPool);
+    const scoreTime = Date.now() - scoreStart;
+    
+    console.log(`✅ Pool scored: ${scoredPool.length} products in ${Math.round(scoreTime/1000)}s\n`);
+
+    // Stage 3: Smart selection of top 1K
+    console.log('[Stage 3/4] Smart selection...');
+    const selectStart = Date.now();
+    const { products: selectedProducts, stats } = selectTopProducts(scoredPool, parseInt(limit));
+    const selectTime = Date.now() - selectStart;
+    
+    console.log(`✅ Selected: ${selectedProducts.length} products in ${Math.round(selectTime/1000)}s\n`);
+
+    // Stage 4: Enrich final products
+    console.log('[Stage 4/4] Final enrichment...');
+    const enrichStart = Date.now();
+    const { enrichedProducts } = analyzeNiche(selectedProducts, q);
+    const enrichTime = Date.now() - enrichStart;
+    
+    // Add affiliate links
+    const finalProducts = enrichedProducts.map(p => ({
+      ...p,
+      affiliateLink: p.affiliateLink || p.itemUrl
+    }));
+
+    const totalTime = Date.now() - executionStart;
+
+    console.log('\n🎯 ============================================');
+    console.log(`🎯 MASSIVE SEARCH COMPLETE: "${q}"`);
+    console.log(`🎯 Final Results: ${finalProducts.length} products`);
+    console.log(`🎯 Total Time: ${Math.round(totalTime/1000)}s`);
+    console.log(`🎯 Pool Size: ${rawPool.length} → Quality: ${scoredPool.length} → Final: ${finalProducts.length}`);
+    console.log(`🎯 Selection Rate: ${stats.selectionRate}%`);
+    console.log('🎯 ============================================\n');
+
+    const response = {
+      success: true,
+      products: finalProducts,
+      data: finalProducts,
+      count: finalProducts.length,
+      query: q,
+      mode: 'massive',
+      stats: {
+        poolSize: rawPool.length,
+        qualityCount: scoredPool.length,
+        selectionRate: stats.selectionRate,
+        timing: {
+          poolFetch: poolTime,
+          scoring: scoreTime,
+          selection: selectTime,
+          enrichment: enrichTime,
+          total: totalTime
+        },
+        quality: stats.quality,
+        diversity: stats.diversity
+      },
+      executionTimeMs: totalTime,
+      cached: false
+    };
+
+    // Cache for 2 hours
+    cache.set(cacheKey, response, 7200);
+
+    return res.status(200).json(response);
+
+  } catch (error) {
+    console.error('[Massive Search] Error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Massive search failed',
+      message: error.message
     });
   }
 };
