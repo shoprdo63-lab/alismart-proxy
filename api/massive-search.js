@@ -19,15 +19,16 @@ function applyCORS(res) {
 
 /**
  * MASSIVE SEARCH HANDLER
- * AliExpress-only: 100K pool → Top 1K selection
- * Professional sourcing intelligence
+ * AliExpress-only: 20K pool → Top 1K selection
+ * Professional sourcing intelligence optimized for Vercel
+ * 10 strategies × 50 pages = up to 50K potential, ~20K unique
  */
 module.exports = async function handler(req, res) {
   applyCORS(res);
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const executionStart = Date.now();
-  const { q, limit = 1000, poolSize = 100000, minimal = 'false' } = req.query;
+  const { q, limit = 1000, poolSize = 20000, minimal = 'false' } = req.query;
 
   if (!q || !q.trim()) {
     return res.status(400).json({

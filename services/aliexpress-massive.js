@@ -103,9 +103,9 @@ async function searchByKeywordsPage(keywords, pageNo = 1, sort = '') {
 
 /**
  * Fetch products using a single sort strategy
- * Fetches up to 150 pages (15,000 products) per strategy
+ * Fetches up to 50 pages (5,000 products) per strategy for Vercel compatibility
  */
-async function fetchBySortStrategy(keywords, sortStrategy, maxPages = 150) {
+async function fetchBySortStrategy(keywords, sortStrategy, maxPages = 50) {
   const { name, value } = sortStrategy;
   console.log(`[AliExpress Massive] Strategy: ${name} - fetching up to ${maxPages} pages`);
   
@@ -163,13 +163,13 @@ async function fetchBySortStrategy(keywords, sortStrategy, maxPages = 150) {
  * Strategy 1: Multi-Sort Deep Dive
  * Fetches products using all 10 sort strategies in parallel
  */
-async function fetchMultiSortDeepDive(keywords, targetCount = 35000) {
+async function fetchMultiSortDeepDive(keywords, targetCount = 15000) {
   console.log(`[AliExpress Massive] Starting Multi-Sort Deep Dive for "${keywords}"`);
   const startTime = Date.now();
 
-  // Run all 10 strategies in parallel
+  // Run all 10 strategies in parallel (50 pages each = 5,000 max per strategy)
   const strategyPromises = SORT_STRATEGIES.map(strategy => 
-    fetchBySortStrategy(keywords, strategy, 150)
+    fetchBySortStrategy(keywords, strategy, 50)
   );
 
   const allResults = await Promise.all(strategyPromises);
@@ -209,8 +209,8 @@ async function fetchQueryVariations(baseKeywords, targetCount = 25000) {
   const allProducts = [];
 
   for (const variation of variations) {
-    // Fetch 30 pages per variation
-    for (let page = 1; page <= 30; page++) {
+    // Fetch 20 pages per variation (Vercel optimized)
+    for (let page = 1; page <= 20; page++) {
       const pageProducts = await searchByKeywordsPage(variation, page, '');
       
       for (const product of pageProducts) {
@@ -298,7 +298,7 @@ async function fetchSellerExpansion(seedProducts, targetCount = 20000) {
  * Main function: Fetch massive pool from AliExpress
  * Combines all strategies to reach 100K+ products
  */
-async function fetchMassivePool(keywords, targetSize = 100000) {
+async function fetchMassivePool(keywords, targetSize = 20000) {
   console.log(`\n========================================`);
   console.log(`[AliExpress Massive] Starting fetch for: "${keywords}"`);
   console.log(`[AliExpress Massive] Target pool size: ${targetSize}`);
@@ -308,8 +308,8 @@ async function fetchMassivePool(keywords, targetSize = 100000) {
   const seen = new Set();
   const allProducts = [];
 
-  // Strategy 1: Multi-Sort Deep Dive (35K target)
-  const multiSortProducts = await fetchMultiSortDeepDive(keywords, 35000);
+  // Strategy 1: Multi-Sort Deep Dive (15K target)
+  const multiSortProducts = await fetchMultiSortDeepDive(keywords, 15000);
   for (const product of multiSortProducts) {
     const pid = String(product.productId);
     if (!seen.has(pid)) {
@@ -319,9 +319,9 @@ async function fetchMassivePool(keywords, targetSize = 100000) {
   }
   console.log(`[AliExpress Massive] After Multi-Sort: ${allProducts.length} products\n`);
 
-  // Strategy 2: Query Variations (25K target)
+  // Strategy 2: Query Variations (5K target)
   if (allProducts.length < targetSize * 0.7) {
-    const variationProducts = await fetchQueryVariations(keywords, 25000);
+    const variationProducts = await fetchQueryVariations(keywords, 5000);
     for (const product of variationProducts) {
       const pid = String(product.productId);
       if (!seen.has(pid)) {
