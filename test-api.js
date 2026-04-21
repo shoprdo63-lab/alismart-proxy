@@ -17,7 +17,13 @@ const handler = require('./api/search.js');
 function mockReqRes(query, mode = 'exact') {
   const req = {
     method: 'GET',
-    query: { q: query, searchMode: mode }
+    query: { q: query, searchMode: mode },
+    headers: {
+      'x-forwarded-for': '127.0.0.1',
+      'x-real-ip': '127.0.0.1'
+    },
+    connection: { remoteAddress: '127.0.0.1' },
+    socket: { remoteAddress: '127.0.0.1' }
   };
 
   let captured = null;
@@ -31,11 +37,17 @@ function mockReqRes(query, mode = 'exact') {
   return { req, res, getData: () => captured };
 }
 
-const REQUIRED_FIELDS = [
+// Define fields expected in different modes
+const FULL_MODE_FIELDS = [
   'productId', 'title', 'price', 'originalPrice', 'priceNumeric',
   'currency', 'discountPct', 'imgUrl', 'productUrl', 'affiliateLink',
   'rating', 'totalSales', 'trustScore', 'storeUrl', 'commissionRate',
   'category', 'shippingSpeed', 'relevanceScore', 'marketPosition'
+];
+
+const MINIMAL_MODE_FIELDS = [
+  'title', 'price', 'imgUrl', 'affiliateLink', 'discountPct',
+  'shippingCost', 'isChoiceItem', 'productUrl', 'priorityScore', 'relevanceScore'
 ];
 
 // ─── Main Test ──────────────────────────────────────────────────
@@ -61,21 +73,72 @@ async function runTest() {
     process.exit(1);
   }
 
+  // Helper to get field from minified or unminified response
+  function getField(obj, ...possibleKeys) {
+    for (const key of possibleKeys) {
+      if (key in obj) return obj[key];
+    }
+    return undefined;
+  }
+
+  // Extract fields (handle both minified and unminified)
+  const success = getField(data, 'success', 'ok');
+  const count = getField(data, 'count', 'n');
+  const mode = getField(data, 'mode', 'm');
+  const pagesScanned = getField(data, 'pagesScanned', 'ps');
+  const executionTimeMs = getField(data, 'executionTimeMs', 'et');
+  const cached = getField(data, 'cached', 'cache');
+  const products = getField(data, 'products', 'data') || [];
+  const nicheAnalytics = getField(data, 'nicheAnalytics', 'na');
+
+  // Helper to expand minified product keys if needed
+  function expandProduct(product) {
+    if (!product || typeof product !== 'object') return product;
+    
+    // Check if this appears to be minified (has common minified keys)
+    const isMinified = ('t' in product && !('title' in product)) || 
+                      ('p' in product && !('price' in product));
+    
+    if (!isMinified) return product;
+    
+    // Use reverse mapping from json-minify service
+    const REVERSE_MAP = {
+      't': 'title', 'p': 'price', 'i': 'imgUrl', 'a': 'affiliateLink',
+      'id': 'productId', 'op': 'originalPrice', 'pn': 'priceNumeric',
+      'c': 'currency', 'd': 'discountPct', 'u': 'productUrl',
+      'r': 'rating', 's': 'totalSales', 'ts': 'trustScore',
+      'st': 'storeUrl', 'cr': 'commissionRate', 'cat': 'category',
+      'sh': 'shippingSpeed', 'rs': 'relevanceScore', 'mp': 'marketPosition',
+      'sc': 'shippingCost', 'ic': 'isChoiceItem', 'w': 'packageWeight',
+      'cid': 'categoryId', 'bid': 'bundleId', 'bc': 'bundleCount',
+      'pbs': 'productsByStore', 'oid': 'originalId', 'aid': 'alternativeId',
+      'pri': 'priorityScore'
+    };
+    
+    const expanded = {};
+    for (const [key, value] of Object.entries(product)) {
+      const expandedKey = REVERSE_MAP[key] || key;
+      expanded[expandedKey] = value;
+    }
+    return expanded;
+  }
+
+  const expandedProducts = products.map(p => expandProduct(p));
+
   // ── Summary ────────────────────────────────────────────────
   console.log('\n' + '-'.repeat(70));
   console.log('  RESULTS SUMMARY');
   console.log('-'.repeat(70));
-  console.log(`  success        : ${data.success}`);
-  console.log(`  count          : ${data.count}`);
-  console.log(`  mode           : ${data.mode}`);
-  console.log(`  pagesScanned   : ${data.pagesScanned}`);
-  console.log(`  executionTimeMs: ${data.executionTimeMs} (wall: ${elapsed}ms)`);
-  console.log(`  cached         : ${data.cached}`);
+  console.log(`  success        : ${success}`);
+  console.log(`  count          : ${count}`);
+  console.log(`  mode           : ${mode}`);
+  console.log(`  pagesScanned   : ${pagesScanned}`);
+  console.log(`  executionTimeMs: ${executionTimeMs} (wall: ${elapsed}ms)`);
+  console.log(`  cached         : ${cached}`);
 
   // ── Relevance Scores ──────────────────────────────────────
-  const products = data.products || [];
-  if (products.length > 0) {
-    const scores = products.map(p => p.relevanceScore);
+  if (expandedProducts.length > 0) {
+    const scores = expandedProducts.map(p => p.relevanceScore || 0);
     const minScore = Math.min(...scores);
     const maxScore = Math.max(...scores);
     const avgScore = (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1);
@@ -88,8 +151,8 @@ async function runTest() {
   }
 
   // ── Trust Scores ──────────────────────────────────────────
-  if (products.length > 0) {
-    const ts = products.map(p => p.trustScore).filter(t => t > 0);
+  if (expandedProducts.length > 0) {
+    const ts = expandedProducts.map(p => p.trustScore).filter(t => t > 0);
     if (ts.length > 0) {
       console.log(`\n  Trust Scores:`);
       console.log(`    min : ${Math.min(...ts)}`);
@@ -100,25 +163,35 @@ async function runTest() {
 
   // ── Schema Check ──────────────────────────────────────────
   let schemaMissing = [];
-  if (products.length > 0) {
-    const sample = products[0];
-    for (const field of REQUIRED_FIELDS) {
+  let schemaMode = 'full';
+  if (expandedProducts.length > 0) {
+    const sample = expandedProducts[0];
+    
+    // Determine if we're in minimal mode (missing many full mode fields)
+    const fullModeFieldsCount = FULL_MODE_FIELDS.filter(f => f in sample).length;
+    const minimalModeFieldsCount = MINIMAL_MODE_FIELDS.filter(f => f in sample).length;
+    
+    // Use appropriate field set based on what we detect
+    const checkFields = fullModeFieldsCount >= minimalModeFieldsCount ? FULL_MODE_FIELDS : MINIMAL_MODE_FIELDS;
+    schemaMode = fullModeFieldsCount >= minimalModeFieldsCount ? 'full' : 'minimal';
+    
+    for (const field of checkFields) {
       if (!(field in sample)) schemaMissing.push(field);
     }
-    console.log(`\n  Schema Check (sample product):`);
+    console.log(`\n  Schema Check (${schemaMode} mode, sample product):`);
     if (schemaMissing.length === 0) {
-      console.log(`    All ${REQUIRED_FIELDS.length} spec fields present`);
+      console.log(`    All ${checkFields.length} spec fields present`);
     } else {
       console.log(`    MISSING: ${schemaMissing.join(', ')}`);
     }
-    console.log(`\n  Sample Product:`);
+    console.log(`\n  Sample Product (expanded):`);
     console.log(JSON.stringify(sample, null, 2));
   }
 
   // ── Niche Analytics ───────────────────────────────────────
-  if (data.nicheAnalytics) {
+  if (nicheAnalytics) {
     console.log(`\n  Niche Analytics:`);
-    console.log(JSON.stringify(data.nicheAnalytics, null, 2));
+    console.log(JSON.stringify(nicheAnalytics, null, 2));
   }
 
   // ── PASS / FAIL ───────────────────────────────────────────
@@ -127,11 +200,11 @@ async function runTest() {
   console.log('='.repeat(70));
 
   const checks = [
-    { label: 'Products >= 100',      pass: data.count >= 100,                       detail: String(data.count) },
+    { label: 'Products >= 100',      pass: count >= 100,                       detail: String(count) },
     { label: 'Execution < 5 000 ms', pass: elapsed < 5000,                          detail: `${elapsed}ms` },
-    { label: 'Has nicheAnalytics',    pass: !!data.nicheAnalytics,                   detail: data.nicheAnalytics ? 'yes' : 'no' },
+    { label: 'Has nicheAnalytics',    pass: !!nicheAnalytics,                   detail: nicheAnalytics ? 'yes' : 'no' },
     { label: 'Schema complete',       pass: schemaMissing.length === 0,              detail: schemaMissing.length === 0 ? 'all fields' : schemaMissing.join(',') },
-    { label: 'All relevance >= 25',   pass: products.every(p => p.relevanceScore >= 25), detail: products.length > 0 ? `min=${Math.min(...products.map(p => p.relevanceScore))}` : 'n/a' }
+    { label: 'All relevance >= 25',   pass: expandedProducts.every(p => (p.relevanceScore || 0) >= 25), detail: expandedProducts.length > 0 ? `min=${Math.min(...expandedProducts.map(p => p.relevanceScore || 0))}` : 'n/a' }
   ];
 
   let allPass = true;

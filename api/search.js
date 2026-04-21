@@ -4,6 +4,8 @@ const cache = require('../services/cache.js');
 const { filterProducts } = require('../services/content-filter.js');
 const { deduplicateProducts, fastDeduplicate } = require('../services/deduplication.js');
 const { minifyResponse, shouldMinify, calculateSavings } = require('../services/json-minify.js');
+const translateQuery = require('../services/translation.js');
+const { withRateLimit } = require('../services/rate-limiter.js');
 
 const AFFILIATE_ID = process.env.ALI_TRACKING_ID || 'ali_smart_finder_v1';
 const MAX_QUERY_LENGTH = 100;
@@ -492,6 +494,7 @@ function enrichMinimal(products) {
     const priorityScore = calculatePriorityScore(product);
 
     // Immutable Core + Enrichment Fields (per spec §2)
+    // Minimal mode includes relevanceScore for client-side filtering
     result[i] = {
       title: String(product.title || '').substring(0, 200),
       price: String(product.price || ''),
@@ -501,14 +504,16 @@ function enrichMinimal(products) {
       shippingCost: shippingCostNum,
       isChoiceItem: product.isChoiceItem || false,
       itemUrl: String(product.itemUrl || ''),
-      priorityScore: priorityScore
+      priorityScore: priorityScore,
+      relevanceScore: product.relevanceScore || 0
     };
   }
 
   return result;
 }
 
-module.exports = async function handler(req, res) {
+// Create the original handler function
+async function searchHandler(req, res) {
   applyCORS(res);
 
   // Bulletproof: Always return 200 with JSON
@@ -532,18 +537,19 @@ module.exports = async function handler(req, res) {
     const originalPrice = req.query?.originalPrice || req.query?.price || '';
     const minimal = req.query?.minimal === 'true' || req.query?.minimal === '1'; // Minimal mode: only title, price, image, link
     const limit = Math.min(parseInt(req.query?.limit) || MAX_RESULTS, MAX_RESULTS); // Cap at 1000 per spec
+    const locale = req.query?.locale || 'en'; // User locale for regional results
 
     // Sanitize
     const productId = sanitizeProductId(rawProductId);
     const image = sanitizeImageUrl(rawImgUrl);
     const sourceCategory = detectCategory(q);
 
-    console.log('[API] Mode:', searchMode, '| Category:', sourceCategory, '| PID:', productId || 'none', '| Img:', !!image, '| OrigPrice:', originalPrice || 'none');
+    console.log('[API] Mode:', searchMode, '| Category:', sourceCategory, '| PID:', productId || 'none', '| Img:', !!image, '| OrigPrice:', originalPrice || 'none', '| Locale:', locale);
 
     // =====================================================
     // CACHE CHECK
     // =====================================================
-    const cKey = cache.cacheKey('search', searchMode, q || rawProductId || rawImgUrl);
+    const cKey = cache.cacheKey('search', searchMode, q || rawProductId || rawImgUrl, locale);
     const cached = cache.get(cKey);
     if (cached) {
       const executionTimeMs = Date.now() - executionStart;
@@ -572,25 +578,46 @@ module.exports = async function handler(req, res) {
         }
       }
 
-      // Priority 2: Batch keyword search — targeting up to 1,000 results per spec
-      if (results.length === 0 && q) {
+    // Priority 2: Batch keyword search — targeting up to 1,000 results per spec
+    if (results.length === 0 && q) {
+      try {
+        console.log(`[API] EXACT Priority 2: Batch keyword search targeting ${limit} results`);
+        // Always translate query to English for better AliExpress API results
+        // This handles Hebrew, Arabic, Russian, and other languages
+        const translatedQuery = await translateQuery(q, 'en');
+        console.log('[API] Original query:', q.substring(0, 40), '→ Translated:', translatedQuery.substring(0, 40));
+        
+        // Use translated query for category detection too
+        const queryForCategory = translatedQuery || q;
+        const cleaned = smartClean(queryForCategory);
+        const safeQuery = smartTruncate(cleaned || queryForCategory);
+        console.log('[API] Cleaned:', q.substring(0, 40), '→', safeQuery);
+
+        if (safeQuery) {
+          const batchStart = Date.now();
+          // Fetch 1.5x limit to account for filtering losses
+          results = await searchByKeywordsBatch(safeQuery, Math.ceil(limit * 1.5), 10);
+          pagesScanned = Math.ceil(Math.ceil(limit * 1.5) / 20);
+          perfTimings.fetch = Date.now() - batchStart;
+        }
+      } catch (e) {
+        console.log('[API] Batch search failed:', e.message);
+        // Fallback: try with original query if translation fails
         try {
-          console.log(`[API] EXACT Priority 2: Batch keyword search targeting ${limit} results`);
+          console.log('[API] Trying fallback with original query');
           const cleaned = smartClean(q);
           const safeQuery = smartTruncate(cleaned || q);
-          console.log('[API] Cleaned:', q.substring(0, 40), '→', safeQuery);
-
           if (safeQuery) {
             const batchStart = Date.now();
-            // Fetch 1.5x limit to account for filtering losses
             results = await searchByKeywordsBatch(safeQuery, Math.ceil(limit * 1.5), 10);
             pagesScanned = Math.ceil(Math.ceil(limit * 1.5) / 20);
             perfTimings.fetch = Date.now() - batchStart;
           }
-        } catch (e) {
-          console.log('[API] Batch search failed:', e.message);
+        } catch (fallbackError) {
+          console.log('[API] Fallback also failed:', fallbackError.message);
         }
       }
+    }
     }
 
     // =====================================================
@@ -604,7 +631,7 @@ module.exports = async function handler(req, res) {
       if (image) {
         try {
           console.log('[API] VISUAL: Image-only search (ignoring title)');
-          const imageResult = await getIdsByImage(image);
+          const imageResult = await getIdsByImage(image, { locale });
           if (imageResult?.productIds?.length > 0) {
             results = await getProductDetails(imageResult.productIds);
             pagesScanned = 1;
@@ -614,8 +641,11 @@ module.exports = async function handler(req, res) {
           // FALLBACK: If no visual results, try batch keyword search
           if (results.length === 0 && q) {
             console.log('[API] VISUAL FALLBACK: No visual results, trying batch keyword search');
-            const cleaned = smartClean(q);
-            const safeQuery = smartTruncate(cleaned || q);
+            // Translate query to English for better AliExpress API results
+            const translatedQuery = await translateQuery(q, 'en');
+            console.log('[API] Original query:', q.substring(0, 40), '→ Translated:', translatedQuery.substring(0, 40));
+            const cleaned = smartClean(translatedQuery);
+            const safeQuery = smartTruncate(cleaned || translatedQuery);
             console.log('[API] Fallback query:', q.substring(0, 40), '→', safeQuery);
 
             if (safeQuery) {
@@ -681,11 +711,11 @@ module.exports = async function handler(req, res) {
     }
 
     // Layer 4 — SNIPER FILTER: Semantic noun-matching relevance
-    // Stamps relevanceScore on every surviving item; drops items < 10.
+    // Stamps relevanceScore on every surviving item; drops items < 25.
     if (results.length > 0 && q) {
       const relStart = Date.now();
       const beforeRelevance = results.length;
-      const { relevant, droppedCount } = filterByRelevance(results, q, 10);
+      const { relevant, droppedCount } = filterByRelevance(results, q, 25);
       console.log(`[API] Relevance filter (Sniper): ${beforeRelevance} → ${relevant.length} (dropped ${droppedCount} irrelevant)`);
       results = relevant;
       perfTimings.relevanceFilter = Date.now() - relStart;
@@ -745,6 +775,7 @@ module.exports = async function handler(req, res) {
       data: finalProducts,
       count: finalProducts.length,
       mode: searchMode,
+      locale: locale,
       category: sourceCategory,
       nicheAnalytics,
       executionTimeMs,
@@ -796,3 +827,6 @@ module.exports = async function handler(req, res) {
     });
   }
 };
+
+// Export the handler wrapped with rate limiting
+module.exports = withRateLimit(searchHandler);

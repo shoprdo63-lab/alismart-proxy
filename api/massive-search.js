@@ -7,6 +7,9 @@ const { fetchMassivePool } = require('../services/aliexpress-massive.js');
 const { scoreProductPool } = require('../services/aliexpress-scoring.js');
 const { selectTopProducts } = require('../services/smart-selection.js');
 
+// AliExpress Advanced API
+const { advancedProductSearch } = require('../services/advanced-ali-api.js');
+
 const AFFILIATE_ID = process.env.ALI_TRACKING_ID || 'ali_smart_finder_v1';
 const MAX_RESULTS = 1000;
 
@@ -21,14 +24,14 @@ function applyCORS(res) {
  * MASSIVE SEARCH HANDLER
  * AliExpress-only: 20K pool → Top 1K selection
  * Professional sourcing intelligence optimized for Vercel
- * 10 strategies × 50 pages = up to 50K potential, ~20K unique
+ * Uses Advanced API: hot products + promo + standard search
  */
 module.exports = async function handler(req, res) {
   applyCORS(res);
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const executionStart = Date.now();
-  const { q, limit = 1000, poolSize = 20000, minimal = 'false' } = req.query;
+  const { q, limit = 1000, poolSize = 20000, minimal = 'false', useAdvanced = 'true' } = req.query;
 
   if (!q || !q.trim()) {
     return res.status(400).json({
@@ -53,9 +56,22 @@ module.exports = async function handler(req, res) {
     // Stage 1: Fetch massive pool from AliExpress
     console.log('[Stage 1/4] Fetching massive pool...');
     const poolStart = Date.now();
-    const rawPool = await fetchMassivePool(q, parseInt(poolSize));
-    const poolTime = Date.now() - poolStart;
     
+    let rawPool;
+    if (useAdvanced === 'true') {
+      console.log('[Stage 1/4] Using Advanced API (hot products + promo + standard)...');
+      rawPool = await advancedProductSearch(q, {
+        useHotProducts: true,
+        usePromoProducts: true,
+        useStandardSearch: true,
+        targetCount: parseInt(poolSize)
+      });
+    } else {
+      console.log('[Stage 1/4] Using standard search only...');
+      rawPool = await fetchMassivePool(q, parseInt(poolSize));
+    }
+    
+    const poolTime = Date.now() - poolStart;
     console.log(`✅ Pool fetched: ${rawPool.length} products in ${Math.round(poolTime/1000)}s\n`);
 
     // Stage 2: Score all products
@@ -120,6 +136,7 @@ module.exports = async function handler(req, res) {
       count: finalProducts.length,
       query: q,
       mode: 'massive',
+      apiMode: useAdvanced === 'true' ? 'advanced' : 'standard',
       stats: {
         poolSize: rawPool.length,
         qualityCount: scoredPool.length,
@@ -132,7 +149,16 @@ module.exports = async function handler(req, res) {
           total: totalTime
         },
         quality: stats.quality,
-        diversity: stats.diversity
+        diversity: stats.diversity,
+        apiFeatures: useAdvanced === 'true' ? {
+          hotProducts: true,
+          promoProducts: true,
+          standardSearch: true
+        } : {
+          hotProducts: false,
+          promoProducts: false,
+          standardSearch: true
+        }
       },
       executionTimeMs: totalTime,
       cached: false

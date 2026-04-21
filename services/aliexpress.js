@@ -7,6 +7,161 @@ const TRACKING_ID = process.env.ALI_TRACKING_ID || 'ali_smart_finder_v1';
 const API_URL = 'https://api-sg.aliexpress.com/sync';
 
 /**
+ * AliExpress domain mapping by locale
+ * Supports ALL global marketplaces dynamically
+ */
+const ALIEXPRESS_DOMAINS = {
+  // Major markets (explicit mapping for clarity)
+  'en': 'www.aliexpress.com',      // English/Global
+  'es': 'es.aliexpress.com',       // Spanish
+  'fr': 'fr.aliexpress.com',       // French
+  'de': 'de.aliexpress.com',       // German
+  'it': 'it.aliexpress.com',       // Italian
+  'pl': 'pl.aliexpress.com',       // Polish
+  'nl': 'nl.aliexpress.com',       // Dutch
+  'pt': 'pt.aliexpress.com',       // Portuguese
+  'ru': 'ru.aliexpress.com',       // Russian
+  'he': 'he.aliexpress.com',       // Hebrew
+  'iw': 'he.aliexpress.com',       // Legacy Hebrew
+  'ar': 'ar.aliexpress.com',       // Arabic
+  'tr': 'tr.aliexpress.com',       // Turkish
+  'ja': 'ja.aliexpress.com',       // Japanese
+  'ko': 'ko.aliexpress.com',       // Korean
+  'th': 'th.aliexpress.com',       // Thai
+  'id': 'id.aliexpress.com',       // Indonesian
+  'vi': 'vi.aliexpress.com',       // Vietnamese
+  'ms': 'ms.aliexpress.com',       // Malay
+  'zh': 'www.aliexpress.com',      // Chinese -> Global
+};
+
+/**
+ * Valid locale codes pattern (2-3 letters)
+ * AliExpress supports: ar, de, en, es, fr, he, id, it, ja, ko, ms, nl, pl, pt, ru, th, tr, vi, zh
+ */
+const LOCALE_PATTERN = /^[a-z]{2,3}$/;
+
+/**
+ * Get AliExpress domain for a locale
+ * Works with ANY valid locale code dynamically
+ * @param {string} locale - Locale code (e.g., 'en', 'es', 'fr', 'xx')
+ * @returns {string} AliExpress domain
+ */
+function getAliExpressDomain(locale) {
+  if (!locale || typeof locale !== 'string') {
+    return 'www.aliexpress.com';
+  }
+  
+  // Normalize locale: extract first part (e.g., 'en-US' -> 'en', 'es_ES' -> 'es')
+  const normalizedLocale = locale.toLowerCase().trim().split(/[-_]/)[0];
+  
+  // If we have explicit mapping, use it
+  if (ALIEXPRESS_DOMAINS[normalizedLocale]) {
+    return ALIEXPRESS_DOMAINS[normalizedLocale];
+  }
+  
+  // For any 2-3 letter locale code, try constructing the domain dynamically
+  // This supports future/new AliExpress markets automatically
+  if (LOCALE_PATTERN.test(normalizedLocale)) {
+    // Check if AliExpress likely has a subdomain for this locale
+    // Pattern: xx.aliexpress.com for most locales
+    const constructedDomain = `${normalizedLocale}.aliexpress.com`;
+    console.log(`[getAliExpressDomain] Constructed domain for locale '${normalizedLocale}': ${constructedDomain}`);
+    return constructedDomain;
+  }
+  
+  // Fallback to global site for invalid/unknown codes
+  console.log(`[getAliExpressDomain] Unknown locale '${locale}', defaulting to www.aliexpress.com`);
+  return 'www.aliexpress.com';
+}
+
+/**
+ * Build Accept-Language HTTP header for any locale
+ * Supports any language code dynamically
+ * @param {string} locale - Locale code (e.g., 'es', 'fr', 'ja')
+ * @returns {string} Accept-Language header value
+ */
+function buildAcceptLanguageHeader(locale) {
+  if (!locale || typeof locale !== 'string') {
+    return 'en-US,en;q=0.9';
+  }
+  
+  const normalized = locale.toLowerCase().trim().split(/[-_]/)[0];
+  
+  // Map of locale to full language tag
+  const localeMap = {
+    'en': 'en-US',
+    'es': 'es-ES',
+    'fr': 'fr-FR',
+    'de': 'de-DE',
+    'it': 'it-IT',
+    'pl': 'pl-PL',
+    'nl': 'nl-NL',
+    'pt': 'pt-PT',
+    'ru': 'ru-RU',
+    'he': 'he-IL',
+    'iw': 'he-IL',
+    'ar': 'ar-SA',
+    'tr': 'tr-TR',
+    'ja': 'ja-JP',
+    'ko': 'ko-KR',
+    'th': 'th-TH',
+    'id': 'id-ID',
+    'vi': 'vi-VN',
+    'ms': 'ms-MY',
+    'zh': 'zh-CN',
+    'uk': 'uk-UA',
+    'sv': 'sv-SE',
+    'no': 'nb-NO',
+    'da': 'da-DK',
+    'fi': 'fi-FI',
+    'cs': 'cs-CZ',
+    'hu': 'hu-HU',
+    'ro': 'ro-RO',
+    'bg': 'bg-BG',
+    'hr': 'hr-HR',
+    'sk': 'sk-SK',
+    'sl': 'sl-SI',
+    'lt': 'lt-LT',
+    'lv': 'lv-LV',
+    'et': 'et-EE',
+    'el': 'el-GR',
+    'hi': 'hi-IN',
+    'bn': 'bn-BD',
+    'ta': 'ta-IN',
+    'te': 'te-IN',
+    'mr': 'mr-IN',
+    'gu': 'gu-IN',
+    'kn': 'kn-IN',
+    'ml': 'ml-IN',
+    'pa': 'pa-IN',
+    'ur': 'ur-PK',
+    'fa': 'fa-IR',
+    'sw': 'sw-KE',
+    'tl': 'tl-PH',
+    'my': 'my-MM',
+    'km': 'km-KH',
+    'lo': 'lo-LA',
+    'ne': 'ne-NP',
+    'si': 'si-LK',
+  };
+  
+  // For known locales, use mapped value
+  if (localeMap[normalized]) {
+    return `${localeMap[normalized]},${normalized};q=0.9,en-US;q=0.8`;
+  }
+  
+  // For any 2-3 letter locale, construct dynamically
+  if (/^[a-z]{2,3}$/.test(normalized)) {
+    // Try common region patterns
+    const region = normalized.toUpperCase();
+    return `${normalized}-${region},${normalized};q=0.9,en-US;q=0.8`;
+  }
+  
+  // Fallback
+  return 'en-US,en;q=0.9';
+}
+
+/**
  * Clean image URL for visual search - remove query params and resize suffixes
  */
 function cleanImageUrl(imageUrl) {
@@ -35,9 +190,12 @@ function cleanImageUrl(imageUrl) {
 
 /**
  * פונקציה שמחלצת מזהי מוצרים (Product IDs) מתוצאות חיפוש ויזואלי
- * Uses he.aliexpress.com endpoint with browser-like headers
+ * Uses locale-specific AliExpress endpoint with browser-like headers
+ * @param {string} imageUrl - Image URL to search
+ * @param {Object} options - Options including locale
+ * @param {string} options.locale - User locale (e.g., 'en', 'es', 'fr', 'he')
  */
-async function getIdsByImage(imageUrl) {
+async function getIdsByImage(imageUrl, options = {}) {
     try {
         // Validation: Check if imageUrl is provided and valid
         if (!imageUrl) {
@@ -64,16 +222,25 @@ async function getIdsByImage(imageUrl) {
         console.log('[getIdsByImage] Original URL:', imageUrl.substring(0, 80) + '...');
         console.log('[getIdsByImage] Cleaned URL:', cleanImgUrl.substring(0, 80) + '...');
 
-        // Try the new he.aliexpress.com visual search endpoint with browser headers
-        const url = `https://he.aliexpress.com/glober/search/visual?imgUrl=${encodeURIComponent(cleanImgUrl)}`;
+        // Determine locale and domain for visual search
+        const locale = options.locale || 'en';
+        const domain = getAliExpressDomain(locale);
+        
+        console.log(`[getIdsByImage] Using locale: ${locale}, domain: ${domain}`);
+        
+        // Use locale-specific AliExpress visual search endpoint
+        const url = `https://${domain}/glober/search/visual?imgUrl=${encodeURIComponent(cleanImgUrl)}`;
 
+        // Build Accept-Language header dynamically for any locale
+        const acceptLang = buildAcceptLanguageHeader(locale);
+        
         const response = await axios.get(url, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Referer': 'https://www.aliexpress.com/',
-                'Origin': 'https://www.aliexpress.com',
+                'Accept-Language': acceptLang,
+                'Referer': `https://${domain}/`,
+                'Origin': `https://${domain}`,
                 'Sec-Fetch-Dest': 'document',
                 'Sec-Fetch-Mode': 'navigate',
                 'Sec-Fetch-Site': 'same-origin',

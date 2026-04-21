@@ -36,6 +36,7 @@ const KEY_MAP = {
   packageWeight: 'w',
   categoryId: 'cid',
   bundleId: 'bid',
+  priorityScore: 'pri',
 
   // Bundle fields
   bundles: 'bundles',
@@ -76,11 +77,21 @@ function minifyProduct(product, minimal = false) {
   const minified = {};
   
   if (minimal) {
-    // Minimal mode: Only 4 essential fields
+    // Minimal mode: Include all fields from enrichMinimal function
+    // Core 4 fields: title, price, imgUrl, affiliateLink
+    // Plus enrichment fields: discountPct, shippingCost, isChoiceItem, itemUrl, priorityScore, relevanceScore
     if (product.title !== undefined) minified[KEY_MAP.title] = product.title;
     if (product.price !== undefined) minified[KEY_MAP.price] = product.price;
     if (product.imgUrl !== undefined) minified[KEY_MAP.imgUrl] = product.imgUrl;
     if (product.affiliateLink !== undefined) minified[KEY_MAP.affiliateLink] = product.affiliateLink;
+    
+    // Additional enrichment fields for minimal mode
+    if (product.discountPct !== undefined) minified[KEY_MAP.discountPct] = product.discountPct;
+    if (product.shippingCost !== undefined) minified[KEY_MAP.shippingCost] = product.shippingCost;
+    if (product.isChoiceItem !== undefined) minified[KEY_MAP.isChoiceItem] = product.isChoiceItem;
+    if (product.itemUrl !== undefined) minified[KEY_MAP.itemUrl] = product.itemUrl;
+    if (product.priorityScore !== undefined) minified[KEY_MAP.priorityScore] = product.priorityScore;
+    if (product.relevanceScore !== undefined) minified[KEY_MAP.relevanceScore] = product.relevanceScore;
   } else {
     // Full mode: Map all available fields
     for (const [fullKey, value] of Object.entries(product)) {
