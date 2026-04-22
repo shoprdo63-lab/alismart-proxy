@@ -60,11 +60,13 @@ function enforceLimit() {
  * @param {string} prefix - e.g. "search"
  * @param {string} mode - e.g. "exact", "visual"
  * @param {string} query - Search query or identifier
+ * @param {string} locale - Optional locale code (e.g., 'en', 'he') for language-specific caching
  * @returns {string}
  */
-function cacheKey(prefix, mode, query) {
+function cacheKey(prefix, mode, query, locale = '') {
   const normalizedQuery = String(query || '').toLowerCase().trim();
-  return `${prefix}:${mode}:${normalizedQuery}`;
+  const localeSuffix = locale ? `:${locale.toLowerCase().trim()}` : '';
+  return `${prefix}:${mode}:${normalizedQuery}${localeSuffix}`;
 }
 
 /**

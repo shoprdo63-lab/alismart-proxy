@@ -29,7 +29,8 @@ module.exports = async function handler(req, res) {
     expandSearch = 'true',
     includeHot = 'true',
     includePromo = 'true',
-    locale = 'en'
+    locale = 'en',
+    skipCache = 'false'
   } = req.query;
 
   if (!imageUrl || !imageUrl.trim()) {
@@ -40,10 +41,15 @@ module.exports = async function handler(req, res) {
   }
 
   const cacheKey = `visual:${imageUrl}:${limit}:${expandSearch}:${locale}`;
-  const cached = cache.get(cacheKey);
-  if (cached) {
-    console.log('[Visual Search] Cache hit for:', imageUrl.substring(0, 50));
-    return res.status(200).json({ ...cached, cached: true });
+  
+  if (skipCache !== 'true') {
+    const cached = cache.get(cacheKey);
+    if (cached) {
+      console.log(`[Visual Search] Cache hit for: ${imageUrl.substring(0, 50)} (locale: ${locale})`);
+      return res.status(200).json({ ...cached, cached: true });
+    }
+  } else {
+    console.log(`[Visual Search] Cache skipped (skipCache=true) for: ${imageUrl.substring(0, 50)}`);
   }
 
   try {

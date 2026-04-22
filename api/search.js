@@ -538,6 +538,7 @@ async function searchHandler(req, res) {
     const minimal = req.query?.minimal === 'true' || req.query?.minimal === '1'; // Minimal mode: only title, price, image, link
     const limit = Math.min(parseInt(req.query?.limit) || MAX_RESULTS, MAX_RESULTS); // Cap at 1000 per spec
     const locale = req.query?.locale || 'en'; // User locale for regional results
+    const skipCache = req.query?.skipCache === 'true' || req.query?.skipCache === '1'; // Skip cache for fresh results
 
     // Sanitize
     const productId = sanitizeProductId(rawProductId);
@@ -550,11 +551,16 @@ async function searchHandler(req, res) {
     // CACHE CHECK
     // =====================================================
     const cKey = cache.cacheKey('search', searchMode, q || rawProductId || rawImgUrl, locale);
-    const cached = cache.get(cKey);
-    if (cached) {
-      const executionTimeMs = Date.now() - executionStart;
-      console.log(`[API] Cache HIT for key "${cKey}" — ${cached.count} products in ${executionTimeMs}ms`);
-      return res.status(200).json({ ...cached, cached: true, executionTimeMs });
+    
+    if (!skipCache) {
+      const cached = cache.get(cKey);
+      if (cached) {
+        const executionTimeMs = Date.now() - executionStart;
+        console.log(`[API] Cache HIT for key "${cKey}" — ${cached.count} products in ${executionTimeMs}ms`);
+        return res.status(200).json({ ...cached, cached: true, executionTimeMs });
+      }
+    } else {
+      console.log(`[API] Cache skipped (skipCache=true) for key: ${cKey}`);
     }
 
     let results = [];

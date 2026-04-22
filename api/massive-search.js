@@ -31,7 +31,7 @@ module.exports = async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const executionStart = Date.now();
-  const { q, limit = 1000, poolSize = 20000, minimal = 'false', useAdvanced = 'true' } = req.query;
+  const { q, limit = 1000, poolSize = 20000, minimal = 'false', useAdvanced = 'true', locale = 'en', skipCache = 'false' } = req.query;
 
   if (!q || !q.trim()) {
     return res.status(400).json({
@@ -40,11 +40,18 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  const cacheKey = `massive:${q}:${poolSize}:${limit}`;
-  const cached = cache.get(cacheKey);
-  if (cached) {
-    console.log('[Massive Search] Cache hit for:', q);
-    return res.status(200).json({ ...cached, cached: true });
+  // Build cache key with locale for language-specific caching
+  const cacheKey = `massive:${q}:${poolSize}:${limit}:${locale}`;
+  
+  // Check cache unless skipCache is requested
+  if (skipCache !== 'true') {
+    const cached = cache.get(cacheKey);
+    if (cached) {
+      console.log(`[Massive Search] Cache hit for: "${q}" (locale: ${locale})`);
+      return res.status(200).json({ ...cached, cached: true });
+    }
+  } else {
+    console.log(`[Massive Search] Cache skipped for: "${q}" (skipCache=true)`);
   }
 
   try {
@@ -135,6 +142,7 @@ module.exports = async function handler(req, res) {
       data: finalProducts,
       count: finalProducts.length,
       query: q,
+      locale: locale,
       mode: 'massive',
       apiMode: useAdvanced === 'true' ? 'advanced' : 'standard',
       stats: {
