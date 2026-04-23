@@ -316,28 +316,53 @@ function getCurrencyParam(currency = 'USD') {
 }
 
 /**
+ * Parse full locale code (e.g., 'en_US', 'es-ES') into language and region
+ * @param {string} locale - Full locale code
+ * @returns {Object} { lang, region }
+ */
+function parseLocale(locale = 'en') {
+  if (!locale || typeof locale !== 'string') {
+    return { lang: 'en', region: 'US' };
+  }
+  
+  // Handle formats: 'en_US', 'es-ES', 'en', 'es'
+  const parts = locale.split(/[-_]/);
+  const lang = parts[0].toLowerCase();
+  const region = parts[1] ? parts[1].toUpperCase() : null;
+  
+  return { lang, region };
+}
+
+/**
  * Build comprehensive headers for AliExpress requests with localization
- * @param {string} locale - Locale code
+ * @param {string} locale - Locale code (e.g., 'en', 'es', 'en_US', 'es-ES')
  * @param {string} currency - Currency code
- * @param {string} region - Region code
+ * @param {string} region - Region code (optional, extracted from locale if not provided)
  * @param {string} domain - AliExpress domain
  * @returns {Object} Headers object
  */
 function buildAliExpressHeaders(locale = 'en', currency = 'USD', region = '', domain = 'www.aliexpress.com') {
-  const acceptLang = buildAcceptLanguageHeader(locale);
+  // Parse locale to extract language and region
+  const { lang, region: localeRegion } = parseLocale(locale);
+  
+  // Use provided region or fall back to locale region or default
+  const finalRegion = region?.toUpperCase() || localeRegion || 'US';
+  const finalLocale = `${lang}_${finalRegion}`;
+  
+  const acceptLang = buildAcceptLanguageHeader(lang);
   const currencyCode = getCurrencyParam(currency);
-  const siteCode = REGION_SITE_MAP[region?.toUpperCase()] || 'usa';
+  const siteCode = REGION_SITE_MAP[finalRegion] || 'usa';
   
   // Build cookie string with localization
   const cookies = [
     `xafs=${currencyCode}`,
     `currency=${currencyCode}`,
-    `xman_us_f=x_locale=${locale}_${region || 'US'}&x_currency=${currencyCode}&x_currencies=${currencyCode}&x_site=${siteCode}&x_l=0`,
+    `xman_us_f=x_locale=${finalLocale}&x_currency=${currencyCode}&x_currencies=${currencyCode}&x_site=${siteCode}&x_l=0`,
     `aep_usuc_f=site=${siteCode}&c_tp=${currencyCode}&x_al_f=null`,
-    `intl_locale=${locale}_${region || 'US'}`,
-    `language=${locale}`,
-    `csp_sfrom=${region?.toUpperCase() || 'US'}`,
-    `region=${region?.toUpperCase() || 'US'}`
+    `intl_locale=${finalLocale}`,
+    `language=${lang}`,
+    `csp_sfrom=${finalRegion}`,
+    `region=${finalRegion}`
   ].join('; ');
 
   return {
