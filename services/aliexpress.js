@@ -338,6 +338,23 @@ function parseLocale(locale = 'en') {
 }
 
 /**
+ * Get User-Agent based on locale
+ * Hebrew requests get a specific UA, global/regional get a more generic one
+ * @param {string} lang - Language code
+ * @returns {string} User-Agent string
+ */
+function getUserAgent(lang = 'en') {
+  // Global/Regional User-Agent (more generic, rotates Chrome versions)
+  const globalUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+  
+  // Hebrew-specific User-Agent (slightly different for diversity)
+  const hebrewUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
+  
+  // Use Hebrew UA for Hebrew locale, global UA for everything else
+  return (lang === 'he' || lang === 'iw') ? hebrewUA : globalUA;
+}
+
+/**
  * Build comprehensive headers for AliExpress requests with localization
  * @param {string} locale - Locale code (e.g., 'en', 'es', 'en_US', 'es-ES')
  * @param {string} currency - Currency code
@@ -356,6 +373,7 @@ function buildAliExpressHeaders(locale = 'en', currency = 'USD', region = '', do
   const acceptLang = buildAcceptLanguageHeader(lang);
   const currencyCode = getCurrencyParam(currency);
   const siteCode = REGION_SITE_MAP[finalRegion] || 'usa';
+  const userAgent = getUserAgent(lang);
   
   // Build cookie string with AliExpress global format
   // aep_usuc_f format: region=ES&site=glo&b_locale=es_ES&curr=EUR
@@ -373,7 +391,7 @@ function buildAliExpressHeaders(locale = 'en', currency = 'USD', region = '', do
   ].join('; ');
 
   return {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+    'User-Agent': userAgent,
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
     'Accept-Language': acceptLang,
     'Accept-Charset': 'UTF-8',
