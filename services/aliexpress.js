@@ -144,15 +144,19 @@ const REGION_SITE_MAP = {
  */
 function getAliExpressDomain(locale) {
   if (!locale || typeof locale !== 'string') {
+    console.log(`[getAliExpressDomain] No locale provided, using global: www.aliexpress.com`);
     return 'www.aliexpress.com';
   }
   
-  // Normalize locale: extract first part (e.g., 'en-US' -> 'en', 'es_ES' -> 'es')
-  const normalizedLocale = locale.toLowerCase().trim().split(/[-_]/)[0];
+  // Parse full locale code (e.g., 'en-US' -> 'en', 'es_ES' -> 'es')
+  const { lang: normalizedLocale, region } = parseLocale(locale);
   
   // If we have explicit mapping, use it
   if (ALIEXPRESS_DOMAINS[normalizedLocale]) {
-    return ALIEXPRESS_DOMAINS[normalizedLocale];
+    const domain = ALIEXPRESS_DOMAINS[normalizedLocale];
+    const isGlobal = domain === 'www.aliexpress.com';
+    console.log(`[getAliExpressDomain] Locale '${locale}' → Language '${normalizedLocale}' → ${isGlobal ? 'Global' : 'Regional'} domain: ${domain}`);
+    return domain;
   }
   
   // For any 2-3 letter locale code, try constructing the domain dynamically
@@ -161,12 +165,12 @@ function getAliExpressDomain(locale) {
     // Check if AliExpress likely has a subdomain for this locale
     // Pattern: xx.aliexpress.com for most locales
     const constructedDomain = `${normalizedLocale}.aliexpress.com`;
-    console.log(`[getAliExpressDomain] Constructed domain for locale '${normalizedLocale}': ${constructedDomain}`);
+    console.log(`[getAliExpressDomain] Locale '${locale}' → Constructed regional domain: ${constructedDomain}`);
     return constructedDomain;
   }
   
   // Fallback to global site for invalid/unknown codes
-  console.log(`[getAliExpressDomain] Unknown locale '${locale}', defaulting to www.aliexpress.com`);
+  console.log(`[getAliExpressDomain] Unknown locale '${locale}', defaulting to global: www.aliexpress.com`);
   return 'www.aliexpress.com';
 }
 
