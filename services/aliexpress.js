@@ -353,16 +353,19 @@ function buildAliExpressHeaders(locale = 'en', currency = 'USD', region = '', do
   const currencyCode = getCurrencyParam(currency);
   const siteCode = REGION_SITE_MAP[finalRegion] || 'usa';
   
-  // Build cookie string with localization
+  // Build cookie string with AliExpress global format
+  // aep_usuc_f format: region=ES&site=glo&b_locale=es_ES&curr=EUR
+  // This tells AliExpress: "I am a user from [region] looking for prices in [currency]"
   const cookies = [
     `xafs=${currencyCode}`,
     `currency=${currencyCode}`,
     `xman_us_f=x_locale=${finalLocale}&x_currency=${currencyCode}&x_currencies=${currencyCode}&x_site=${siteCode}&x_l=0`,
-    `aep_usuc_f=site=${siteCode}&c_tp=${currencyCode}&x_al_f=null`,
+    `aep_usuc_f=region=${finalRegion}&site=glo&b_locale=${finalLocale}&curr=${currencyCode}`,
     `intl_locale=${finalLocale}`,
     `language=${lang}`,
     `csp_sfrom=${finalRegion}`,
-    `region=${finalRegion}`
+    `region=${finalRegion}`,
+    `locale=${finalLocale}`
   ].join('; ');
 
   return {
