@@ -553,11 +553,47 @@ async function getIdsByImage(imageUrl, options = {}) {
         const matches = [...html.matchAll(regex)];
         
         // הוצאת המספרים בלבד והסרת כפיליות
-        const productIds = [...new Set(matches.map(match => match[1]))];
+        let productIds = [...new Set(matches.map(match => match[1]))];
 
         console.log('[getIdsByImage] Found', productIds.length, 'product IDs');
 
-        // If no products found, include debug info
+        // INTELLIGENT FALLBACK: If 0 results and not already using Global English, retry with en_US/USD
+        if (productIds.length === 0 && !result.usedFallback && locale !== 'en' && lang !== 'en') {
+            console.log(`[getIdsByImage] ⚠️ 0 results with ${locale}/${currency}, trying Global Fallback (en_US/USD)...`);
+            
+            try {
+                const fallbackDomain = 'www.aliexpress.com';
+                const fallbackUrl = `https://${fallbackDomain}/glober/search/visual?imgUrl=${encodeURIComponent(cleanImgUrl)}&currency=USD`;
+                const fallbackResult = await fetchWithGlobalFallback(fallbackUrl, { 
+                    locale: 'en_US', 
+                    currency: 'USD', 
+                    region: 'US', 
+                    domain: fallbackDomain 
+                });
+                
+                const fallbackHtml = fallbackResult.data;
+                const fallbackMatches = [...fallbackHtml.matchAll(regex)];
+                productIds = [...new Set(fallbackMatches.map(match => match[1]))];
+                
+                console.log(`[getIdsByImage] ✅ Global Fallback (0 results retry): Found ${productIds.length} products`);
+                
+                if (productIds.length > 0) {
+                    return { 
+                        productIds, 
+                        debug: null,
+                        usedFallback: true,
+                        locale: 'en',
+                        currency: 'USD',
+                        region: 'US',
+                        fallbackReason: 'zero_results'
+                    };
+                }
+            } catch (fallbackError) {
+                console.log('[getIdsByImage] ❌ Global Fallback (0 results retry) also failed:', fallbackError.message);
+            }
+        }
+
+        // If still no products found, include debug info
         if (productIds.length === 0) {
             // Check for captcha or challenge page
             const hasCaptcha = html.includes('captcha') || html.includes('verify') || html.includes('challenge');
