@@ -25,8 +25,9 @@ const CATEGORY_KEYWORDS = {
 function applyCORS(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept-Language, Accept-Charset');
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Accept-Charset', 'utf-8');
 }
 
 /**
@@ -538,6 +539,9 @@ async function searchHandler(req, res) {
     const minimal = req.query?.minimal === 'true' || req.query?.minimal === '1'; // Minimal mode: only title, price, image, link
     const limit = Math.min(parseInt(req.query?.limit) || MAX_RESULTS, MAX_RESULTS); // Cap at 1000 per spec
     const locale = req.query?.locale || 'en'; // User locale for regional results
+    const currency = req.query?.currency || 'USD'; // User currency (e.g., ILS, EUR, USD)
+    const region = req.query?.region || ''; // User region code (e.g., IL, US, ES)
+    const _t = req.query?._t || ''; // Cache-busting timestamp from extension
     const skipCache = req.query?.skipCache === 'true' || req.query?.skipCache === '1'; // Skip cache for fresh results
 
     // Sanitize
@@ -545,14 +549,18 @@ async function searchHandler(req, res) {
     const image = sanitizeImageUrl(rawImgUrl);
     const sourceCategory = detectCategory(q);
 
-    console.log('[API] Mode:', searchMode, '| Category:', sourceCategory, '| PID:', productId || 'none', '| Img:', !!image, '| OrigPrice:', originalPrice || 'none', '| Locale:', locale);
+    console.log('[API] Mode:', searchMode, '| Category:', sourceCategory, '| PID:', productId || 'none', '| Img:', !!image, '| OrigPrice:', originalPrice || 'none', '| Locale:', locale, '| Currency:', currency, '| Region:', region || 'auto');
 
     // =====================================================
     // CACHE CHECK
     // =====================================================
-    const cKey = cache.cacheKey('search', searchMode, q || rawProductId || rawImgUrl, locale);
+    // Include all localization params in cache key for region-specific results
+    const cKey = cache.cacheKey('search', searchMode, q || rawProductId || rawImgUrl, `${locale}:${currency}:${region}:${_t}`);
     
-    if (!skipCache) {
+    // Cache-busting: if _t timestamp provided, always skip cache for fresh results
+    const shouldSkipCache = skipCache || _t;
+    
+    if (!shouldSkipCache) {
       const cached = cache.get(cKey);
       if (cached) {
         const executionTimeMs = Date.now() - executionStart;
@@ -560,7 +568,7 @@ async function searchHandler(req, res) {
         return res.status(200).json({ ...cached, cached: true, executionTimeMs });
       }
     } else {
-      console.log(`[API] Cache skipped (skipCache=true) for key: ${cKey}`);
+      console.log(`[API] Cache skipped (skipCache: ${skipCache}, _t: ${_t}) for key: ${cKey}`);
     }
 
     let results = [];
@@ -637,7 +645,7 @@ async function searchHandler(req, res) {
       if (image) {
         try {
           console.log('[API] VISUAL: Image-only search (ignoring title)');
-          const imageResult = await getIdsByImage(image, { locale });
+          const imageResult = await getIdsByImage(image, { locale, currency, region });
           if (imageResult?.productIds?.length > 0) {
             results = await getProductDetails(imageResult.productIds);
             pagesScanned = 1;
@@ -782,6 +790,8 @@ async function searchHandler(req, res) {
       count: finalProducts.length,
       mode: searchMode,
       locale: locale,
+      currency: currency,
+      region: region,
       category: sourceCategory,
       nicheAnalytics,
       executionTimeMs,

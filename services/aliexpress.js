@@ -41,6 +41,102 @@ const ALIEXPRESS_DOMAINS = {
 const LOCALE_PATTERN = /^[a-z]{2,3}$/;
 
 /**
+ * Currency to AliExpress currency code mapping
+ */
+const CURRENCY_MAP = {
+  'USD': 'USD',
+  'EUR': 'EUR',
+  'GBP': 'GBP',
+  'ILS': 'ILS',
+  'JPY': 'JPY',
+  'CAD': 'CAD',
+  'AUD': 'AUD',
+  'CHF': 'CHF',
+  'CNY': 'CNY',
+  'RUB': 'RUB',
+  'BRL': 'BRL',
+  'INR': 'INR',
+  'KRW': 'KRW',
+  'MXN': 'MXN',
+  'PLN': 'PLN',
+  'SEK': 'SEK',
+  'NZD': 'NZD',
+  'SGD': 'SGD',
+  'NOK': 'NOK',
+  'DKK': 'DKK',
+  'HKD': 'HKD',
+  'TWD': 'TWD',
+  'THB': 'THB',
+  'IDR': 'IDR',
+  'PHP': 'PHP',
+  'MYR': 'MYR',
+  'VND': 'VND',
+  'AED': 'AED',
+  'SAR': 'SAR',
+  'ZAR': 'ZAR',
+  'TRY': 'TRY',
+  'UAH': 'UAH',
+  'CZK': 'CZK',
+  'HUF': 'HUF',
+  'RON': 'RON',
+  'BGN': 'BGN',
+  'HRK': 'HRK',
+  'ISK': 'ISK'
+};
+
+/**
+ * Region to site code mapping for AliExpress
+ */
+const REGION_SITE_MAP = {
+  'US': 'usa',
+  'GB': 'gbr',
+  'CA': 'can',
+  'AU': 'aus',
+  'IL': 'isr',
+  'DE': 'deu',
+  'FR': 'fra',
+  'ES': 'esp',
+  'IT': 'ita',
+  'NL': 'nld',
+  'PL': 'pol',
+  'SE': 'swe',
+  'NO': 'nor',
+  'DK': 'dnk',
+  'FI': 'fin',
+  'CH': 'che',
+  'AT': 'aut',
+  'BE': 'bel',
+  'PT': 'prt',
+  'IE': 'irl',
+  'RU': 'rus',
+  'UA': 'ukr',
+  'JP': 'jpn',
+  'KR': 'kor',
+  'CN': 'chn',
+  'TW': 'twn',
+  'HK': 'hkg',
+  'SG': 'sgp',
+  'MY': 'mys',
+  'TH': 'tha',
+  'VN': 'vnm',
+  'ID': 'idn',
+  'PH': 'phl',
+  'IN': 'ind',
+  'BR': 'bra',
+  'MX': 'mex',
+  'AR': 'arg',
+  'CL': 'chl',
+  'CO': 'col',
+  'PE': 'per',
+  'ZA': 'zaf',
+  'AE': 'are',
+  'SA': 'sau',
+  'EG': 'egy',
+  'TR': 'tur',
+  'NZ': 'nzl'
+};
+
+/**
  * Get AliExpress domain for a locale
  * Works with ANY valid locale code dynamically
  * @param {string} locale - Locale code (e.g., 'en', 'es', 'fr', 'xx')
@@ -189,11 +285,166 @@ function cleanImageUrl(imageUrl) {
 }
 
 /**
+ * Build currency cookie string for AliExpress
+ * @param {string} currency - Currency code (e.g., 'USD', 'ILS', 'EUR')
+ * @returns {string} Cookie string
+ */
+function buildCurrencyCookie(currency = 'USD') {
+  const validCurrency = CURRENCY_MAP[currency?.toUpperCase()] || 'USD';
+  return `xafs=${validCurrency}; currency=${validCurrency};`;
+}
+
+/**
+ * Build region/site cookies for AliExpress
+ * @param {string} region - Region code (e.g., 'IL', 'US', 'ES')
+ * @param {string} locale - Locale code (e.g., 'he', 'en', 'es')
+ * @returns {string} Cookie string
+ */
+function buildRegionCookies(region = '', locale = 'en') {
+  const siteCode = REGION_SITE_MAP[region?.toUpperCase()] || 'usa';
+  const lang = locale.split('-')[0].toLowerCase();
+  return `xman_us_f=x_locale=${lang}_${region || 'US'}&x_currency=USD&x_currencies=USD&x_site=${siteCode}&x_l=0;`;
+}
+
+/**
+ * Get AliExpress currency parameter for URLs
+ * @param {string} currency - Currency code
+ * @returns {string} Currency parameter for URL
+ */
+function getCurrencyParam(currency = 'USD') {
+  return CURRENCY_MAP[currency?.toUpperCase()] || 'USD';
+}
+
+/**
+ * Build comprehensive headers for AliExpress requests with localization
+ * @param {string} locale - Locale code
+ * @param {string} currency - Currency code
+ * @param {string} region - Region code
+ * @param {string} domain - AliExpress domain
+ * @returns {Object} Headers object
+ */
+function buildAliExpressHeaders(locale = 'en', currency = 'USD', region = '', domain = 'www.aliexpress.com') {
+  const acceptLang = buildAcceptLanguageHeader(locale);
+  const currencyCode = getCurrencyParam(currency);
+  const siteCode = REGION_SITE_MAP[region?.toUpperCase()] || 'usa';
+  
+  // Build cookie string with localization
+  const cookies = [
+    `xafs=${currencyCode}`,
+    `currency=${currencyCode}`,
+    `xman_us_f=x_locale=${locale}_${region || 'US'}&x_currency=${currencyCode}&x_currencies=${currencyCode}&x_site=${siteCode}&x_l=0`,
+    `aep_usuc_f=site=${siteCode}&c_tp=${currencyCode}&x_al_f=null`,
+    `intl_locale=${locale}_${region || 'US'}`,
+    `language=${locale}`,
+    `csp_sfrom=${region?.toUpperCase() || 'US'}`,
+    `region=${region?.toUpperCase() || 'US'}`
+  ].join('; ');
+
+  return {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': acceptLang,
+    'Accept-Charset': 'UTF-8',
+    'Referer': `https://${domain}/`,
+    'Origin': `https://${domain}`,
+    'Cookie': cookies,
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'same-origin',
+    'Upgrade-Insecure-Requests': '1',
+    'Cache-Control': 'max-age=0'
+  };
+}
+
+/**
+ * Fetch with Global Fallback - tries regional request first, falls back to US/USD on 403
+ * @param {string} url - Request URL
+ * @param {Object} options - Request options with locale, currency, region
+ * @returns {Promise<Object>} Response object
+ */
+async function fetchWithGlobalFallback(url, options = {}) {
+  const locale = options.locale || 'en';
+  const currency = options.currency || 'USD';
+  const region = options.region || '';
+  const domain = options.domain || getAliExpressDomain(locale);
+  
+  // Build headers with full localization
+  const headers = buildAliExpressHeaders(locale, currency, region, domain);
+  
+  try {
+    console.log(`[fetchWithGlobalFallback] Requesting with locale=${locale}, currency=${currency}, region=${region || 'auto'}`);
+    
+    const response = await axios.get(url, {
+      headers,
+      timeout: 10000,
+      maxRedirects: 5,
+      responseType: 'text',
+      responseEncoding: 'utf8'
+    });
+    
+    return {
+      success: true,
+      data: response.data,
+      status: response.status,
+      usedFallback: false,
+      locale,
+      currency,
+      region
+    };
+    
+  } catch (error) {
+    const status = error.response?.status;
+    
+    // GLOBAL FALLBACK: If blocked (403) or rate limited (429), retry with US/USD
+    if ((status === 403 || status === 429) && (locale !== 'en' || currency !== 'USD' || region)) {
+      console.log(`[fetchWithGlobalFallback] ⚠️ Blocked (${status}) with ${locale}/${currency}/${region || 'auto'}, trying Global Fallback (en/USD/US)...`);
+      
+      const fallbackDomain = 'www.aliexpress.com';
+      const fallbackHeaders = buildAliExpressHeaders('en', 'USD', 'US', fallbackDomain);
+      
+      try {
+        const fallbackResponse = await axios.get(url, {
+          headers: fallbackHeaders,
+          timeout: 10000,
+          maxRedirects: 5,
+          responseType: 'text',
+          responseEncoding: 'utf8'
+        });
+        
+        console.log('[fetchWithGlobalFallback] ✅ Global Fallback succeeded');
+        
+        return {
+          success: true,
+          data: fallbackResponse.data,
+          status: fallbackResponse.status,
+          usedFallback: true,
+          fallbackLocale: 'en',
+          fallbackCurrency: 'USD',
+          fallbackRegion: 'US',
+          originalLocale: locale,
+          originalCurrency: currency,
+          originalRegion: region
+        };
+        
+      } catch (fallbackError) {
+        console.error('[fetchWithGlobalFallback] ❌ Global Fallback also failed:', fallbackError.message);
+        throw fallbackError;
+      }
+    }
+    
+    // If already using US/USD or different error, throw original error
+    throw error;
+  }
+}
+
+/**
  * פונקציה שמחלצת מזהי מוצרים (Product IDs) מתוצאות חיפוש ויזואלי
- * Uses locale-specific AliExpress endpoint with browser-like headers
+ * Uses locale-specific AliExpress endpoint with browser-like headers and Global Fallback
  * @param {string} imageUrl - Image URL to search
- * @param {Object} options - Options including locale
+ * @param {Object} options - Options including locale, currency, region
  * @param {string} options.locale - User locale (e.g., 'en', 'es', 'fr', 'he')
+ * @param {string} options.currency - User currency (e.g., 'USD', 'ILS', 'EUR')
+ * @param {string} options.region - User region code (e.g., 'IL', 'US', 'ES')
  */
 async function getIdsByImage(imageUrl, options = {}) {
     try {
@@ -222,46 +473,36 @@ async function getIdsByImage(imageUrl, options = {}) {
         console.log('[getIdsByImage] Original URL:', imageUrl.substring(0, 80) + '...');
         console.log('[getIdsByImage] Cleaned URL:', cleanImgUrl.substring(0, 80) + '...');
 
-        // Determine locale and domain for visual search
+        // Determine locale, currency, region for visual search
         const locale = options.locale || 'en';
+        const currency = options.currency || 'USD';
+        const region = options.region || '';
         const domain = getAliExpressDomain(locale);
         
-        console.log(`[getIdsByImage] Using locale: ${locale}, domain: ${domain}`);
+        console.log(`[getIdsByImage] Using locale: ${locale}, currency: ${currency}, region: ${region || 'auto'}, domain: ${domain}`);
         
-        // Use locale-specific AliExpress visual search endpoint
-        const url = `https://${domain}/glober/search/visual?imgUrl=${encodeURIComponent(cleanImgUrl)}`;
+        // Use locale-specific AliExpress visual search endpoint with currency parameter
+        const currencyCode = getCurrencyParam(currency);
+        const url = `https://${domain}/glober/search/visual?imgUrl=${encodeURIComponent(cleanImgUrl)}&currency=${currencyCode}`;
 
-        // Build Accept-Language header dynamically for any locale
-        const acceptLang = buildAcceptLanguageHeader(locale);
+        // Use fetchWithGlobalFallback for automatic retry on 403/429
+        const result = await fetchWithGlobalFallback(url, { locale, currency, region, domain });
         
-        const response = await axios.get(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                'Accept-Language': acceptLang,
-                'Referer': `https://${domain}/`,
-                'Origin': `https://${domain}`,
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'same-origin',
-                'Upgrade-Insecure-Requests': '1',
-                'Cache-Control': 'max-age=0'
-            },
-            timeout: 10000,
-            maxRedirects: 5
-        });
-
-        // חיפוש מזהי מוצר בתוך ה-HTML שחוזר (באמצעות Regex)
-        const html = response.data;
+        // Log if fallback was used
+        if (result.usedFallback) {
+          console.log(`[getIdsByImage] ⚠️ Used Global Fallback (original: ${result.originalLocale}/${result.originalCurrency}, fallback: ${result.fallbackLocale}/${result.fallbackCurrency})`);
+        }
+        
+        const html = result.data;
         
         // Debug: Log response status and HTML length for troubleshooting
-        console.log('[getIdsByImage] Response Status:', response.status, response.statusText);
+        console.log('[getIdsByImage] Response Status:', result.status);
         console.log('[getIdsByImage] Response HTML length:', html.length);
         
         const regex = /"productId":"(\d+)"/g;
         const matches = [...html.matchAll(regex)];
         
-        // הוצאת המספרים בלבד והסרת כפילויות
+        // הוצאת המספרים בלבד והסרת כפיליות
         const productIds = [...new Set(matches.map(match => match[1]))];
 
         console.log('[getIdsByImage] Found', productIds.length, 'product IDs');
@@ -281,6 +522,9 @@ async function getIdsByImage(imageUrl, options = {}) {
                     isEmpty,
                     hasError,
                     imageUrl: cleanImgUrl,
+                    usedFallback: result.usedFallback || false,
+                    locale: result.usedFallback ? result.fallbackLocale : locale,
+                    currency: result.usedFallback ? result.fallbackCurrency : currency,
                     hint: hasCaptcha ? 'AliExpress returned captcha/challenge page' : 
                           isEmpty ? 'Empty response - image may not be accessible' : 
                           hasError ? 'AliExpress returned an error page' :
@@ -289,7 +533,13 @@ async function getIdsByImage(imageUrl, options = {}) {
             };
         }
 
-        return { productIds, debug: null };
+        return { 
+            productIds, 
+            debug: null,
+            usedFallback: result.usedFallback || false,
+            locale: result.usedFallback ? result.fallbackLocale : locale,
+            currency: result.usedFallback ? result.fallbackCurrency : currency
+        };
     } catch (error) {
         // Enhanced error logging with response status if available
         const status = error.response?.status;
@@ -311,7 +561,7 @@ async function getIdsByImage(imageUrl, options = {}) {
                 status: status || null,
                 statusText: statusText || null,
                 imageUrl,
-                hint: status === 403 ? 'Access blocked (403) - may need to adjust headers' :
+                hint: status === 403 ? 'Access blocked (403) - Global Fallback also failed' :
                       status === 429 ? 'Rate limited (429) - too many requests' :
                       status >= 500 ? `AliExpress server error (${status})` :
                       'Network error or AliExpress blocked the request'

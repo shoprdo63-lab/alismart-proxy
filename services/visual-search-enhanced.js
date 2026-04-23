@@ -31,6 +31,8 @@ const APP_SECRET = process.env.ALI_APP_SECRET || 'YPhzjbGESFs75SniEK0t1wwfKhvrKI
 async function visualSearchEnhanced(imageUrl, options = {}) {
   console.log(`\n🔍 [Visual Search] Starting for: ${imageUrl.substring(0, 60)}...`);
   console.log(`🔍 [Visual Search] Locale: ${options.locale || 'en'}`);
+  console.log(`🔍 [Visual Search] Currency: ${options.currency || 'USD'}`);
+  console.log(`🔍 [Visual Search] Region: ${options.region || 'auto'}`);
   
   const {
     targetResults = 50,
@@ -38,7 +40,9 @@ async function visualSearchEnhanced(imageUrl, options = {}) {
     includeHotProducts = true,
     includePromoProducts = true,
     similarityThreshold = 0.85,
-    locale = 'en'
+    locale = 'en',
+    currency = 'USD',
+    region = ''
   } = options;
 
   const allProducts = [];
@@ -52,7 +56,7 @@ async function visualSearchEnhanced(imageUrl, options = {}) {
 
   // Stage 1: Initial Visual Search (from AliExpress scraping)
   console.log('[Visual Search] Stage 1: Getting initial visual matches...');
-  const visualResults = await getVisualMatchesFromAliExpress(imageUrl, locale);
+  const visualResults = await getVisualMatchesFromAliExpress(imageUrl, locale, currency, region);
   
   if (visualResults.length === 0) {
     console.log('[Visual Search] No visual matches found');
@@ -247,10 +251,12 @@ async function visualSearchEnhanced(imageUrl, options = {}) {
  * Get visual matches from AliExpress (current scraping method)
  * @param {string} imageUrl - Image URL to search
  * @param {string} locale - User locale (e.g., 'en', 'es', 'fr')
+ * @param {string} currency - User currency (e.g., 'USD', 'ILS', 'EUR')
+ * @param {string} region - User region code (e.g., 'IL', 'US', 'ES')
  */
-async function getVisualMatchesFromAliExpress(imageUrl, locale = 'en') {
+async function getVisualMatchesFromAliExpress(imageUrl, locale = 'en', currency = 'USD', region = '') {
   const { getIdsByImage } = require('./aliexpress.js');
-  const result = await getIdsByImage(imageUrl, { locale });
+  const result = await getIdsByImage(imageUrl, { locale, currency, region });
   return result.productIds.map(id => ({ productId: id }));
 }
 

@@ -8,8 +8,9 @@ const AFFILIATE_ID = process.env.ALI_TRACKING_ID || 'ali_smart_finder_v1';
 function applyCORS(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept-Language, Accept-Charset');
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Accept-Charset', 'utf-8');
 }
 
 /**
@@ -30,7 +31,10 @@ module.exports = async function handler(req, res) {
     includeHot = 'true',
     includePromo = 'true',
     locale = 'en',
-    skipCache = 'false'
+    currency = 'USD',
+    region = '',
+    skipCache = 'false',
+    _t = ''
   } = req.query;
 
   if (!imageUrl || !imageUrl.trim()) {
@@ -40,16 +44,19 @@ module.exports = async function handler(req, res) {
     });
   }
 
-  const cacheKey = `visual:${imageUrl}:${limit}:${expandSearch}:${locale}`;
+  const cacheKey = `visual:${imageUrl}:${limit}:${expandSearch}:${locale}:${currency}:${region}:${_t}`;
   
-  if (skipCache !== 'true') {
+  // Cache-busting: if _t timestamp provided, always skip cache for fresh results
+const shouldSkipCache = skipCache === 'true' || _t;
+
+if (!shouldSkipCache) {
     const cached = cache.get(cacheKey);
     if (cached) {
-      console.log(`[Visual Search] Cache hit for: ${imageUrl.substring(0, 50)} (locale: ${locale})`);
+      console.log(`[Visual Search] Cache hit for: ${imageUrl.substring(0, 50)} (locale: ${locale}, currency: ${currency})`);
       return res.status(200).json({ ...cached, cached: true });
     }
   } else {
-    console.log(`[Visual Search] Cache skipped (skipCache=true) for: ${imageUrl.substring(0, 50)}`);
+    console.log(`[Visual Search] Cache skipped for: ${imageUrl.substring(0, 50)} (skipCache: ${skipCache}, _t: ${_t})`);
   }
 
   try {
@@ -58,6 +65,8 @@ module.exports = async function handler(req, res) {
     console.log(`🖼️ Image: ${imageUrl.substring(0, 60)}...`);
     console.log(`🖼️ Target: ${limit} results`);
     console.log(`🖼️ Locale: ${locale}`);
+    console.log(`🖼️ Currency: ${currency}`);
+    console.log(`🖼️ Region: ${region || 'auto'}`);
     console.log('🖼️ ============================================\n');
 
     // Perform enhanced visual search with locale support
@@ -72,7 +81,9 @@ module.exports = async function handler(req, res) {
       expandWithKeywords: expandSearch === 'true',
       includeHotProducts: includeHot === 'true',
       includePromoProducts: includePromo === 'true',
-      locale: locale
+      locale: locale,
+      currency: currency,
+      region: region
     });
     const searchTime = Date.now() - searchStart;
 
@@ -123,6 +134,8 @@ module.exports = async function handler(req, res) {
       count: finalProducts.length,
       imageUrl: imageUrl,
       locale: locale,
+      currency: currency,
+      region: region,
       mode: 'visual-search',
       stats: {
         totalScanned: stats.totalScanned,
