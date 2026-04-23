@@ -372,21 +372,25 @@ function buildAliExpressHeaders(locale = 'en', currency = 'USD', region = '', do
   
   const acceptLang = buildAcceptLanguageHeader(lang);
   const currencyCode = getCurrencyParam(currency);
-  const siteCode = REGION_SITE_MAP[finalRegion] || 'usa';
   const userAgent = getUserAgent(lang);
   
   // Build cookie string with AliExpress global format
-  // aep_usuc_f format: region=ES&site=glo&b_locale=es_ES&curr=EUR
+  // aep_usuc_f format: is_site_glo=y&region=ES&site=glo&b_locale=es_ES&curr=EUR
   // This tells AliExpress: "I am a user from [region] looking for prices in [currency]"
+  
+  // Ensure finalRegion is always set (fallback to US)
+  const safeRegion = finalRegion?.toUpperCase() || 'US';
+  const siteCode = REGION_SITE_MAP[safeRegion] || 'usa';
+  
   const cookies = [
     `xafs=${currencyCode}`,
     `currency=${currencyCode}`,
     `xman_us_f=x_locale=${finalLocale}&x_currency=${currencyCode}&x_currencies=${currencyCode}&x_site=${siteCode}&x_l=0`,
-    `aep_usuc_f=region=${finalRegion}&site=glo&b_locale=${finalLocale}&curr=${currencyCode}`,
+    `aep_usuc_f=is_site_glo=y&region=${safeRegion}&site=glo&b_locale=${finalLocale}&curr=${currencyCode}`,
     `intl_locale=${finalLocale}`,
     `language=${lang}`,
-    `csp_sfrom=${finalRegion}`,
-    `region=${finalRegion}`,
+    `csp_sfrom=${safeRegion}`,
+    `region=${safeRegion}`,
     `locale=${finalLocale}`
   ].join('; ');
 
