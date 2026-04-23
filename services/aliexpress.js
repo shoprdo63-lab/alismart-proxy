@@ -532,16 +532,26 @@ async function getIdsByImage(imageUrl, options = {}) {
         const locale = options.locale || 'en';
         const currency = options.currency || 'USD';
         const region = options.region || '';
-        const domain = getAliExpressDomain(locale);
         
-        console.log(`[getIdsByImage] Using locale: ${locale}, currency: ${currency}, region: ${region || 'auto'}, domain: ${domain}`);
+        // Parse language from locale for domain decision
+        const { lang } = parseLocale(locale);
+        
+        // Visual search API is hosted on global domain for non-Hebrew locales
+        // Hebrew uses he.aliexpress.com, all others use www.aliexpress.com
+        const isHebrew = lang === 'he' || lang === 'iw';
+        const apiDomain = getAliExpressDomain(locale);
+        const refererDomain = isHebrew ? 'he.aliexpress.com' : 'www.aliexpress.com';
+        
+        console.log(`[getIdsByImage] Using locale: ${locale}, currency: ${currency}, region: ${region || 'auto'}`);
+        console.log(`[getIdsByImage] API domain: ${apiDomain}, Referer domain: ${refererDomain} (Hebrew: ${isHebrew})`);
         
         // Use locale-specific AliExpress visual search endpoint with currency parameter
         const currencyCode = getCurrencyParam(currency);
-        const url = `https://${domain}/glober/search/visual?imgUrl=${encodeURIComponent(cleanImgUrl)}&currency=${currencyCode}`;
+        const url = `https://${apiDomain}/glober/search/visual?imgUrl=${encodeURIComponent(cleanImgUrl)}&currency=${currencyCode}`;
 
         // Use fetchWithGlobalFallback for automatic retry on 403/429
-        const result = await fetchWithGlobalFallback(url, { locale, currency, region, domain });
+        // Pass refererDomain so headers use correct Referer/Origin
+        const result = await fetchWithGlobalFallback(url, { locale, currency, region, domain: refererDomain });
         
         // Log if fallback was used
         if (result.usedFallback) {
