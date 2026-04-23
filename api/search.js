@@ -441,29 +441,36 @@ function enrichProducts(products) {
     // Calculate priority score
     const priorityScore = calculatePriorityScore(product);
 
+    // SPREAD: Include ALL raw fields from AliExpress plus normalized fields
+    // This allows extension's normalizeProduct to access original fields like 
+    // product_main_image_url, target_sale_price, etc.
     return {
-      productId: String(product.productId || ''),
-      title: String(product.title || '').substring(0, 200),
-      price: String(product.price || ''),
-      originalPrice: String(product.originalPrice || ''),
+      // Raw AliExpress fields (pass-through)
+      ...product,
+      
+      // Normalized/enhanced fields (may override raw fields)
+      productId: String(product.productId || product.product_id || ''),
+      title: String(product.title || product.product_title || '').substring(0, 200),
+      price: String(product.price || product.sale_price || ''),
+      originalPrice: String(product.originalPrice || product.original_price || ''),
       priceNumeric: product.priceNumeric || 0,
       currency: product.currency || 'USD',
       discountPct: product.discountPct || 0,
-      imgUrl: normalizeImageUrl(product.productImage || product.imageUrl || ''),
+      imgUrl: normalizeImageUrl(product.productImage || product.product_main_image_url || product.imageUrl || ''),
       productUrl: String(finalUrl || ''),
-      affiliateLink: String(product.affiliateLink || finalUrl || ''),
-      rating: product.rating || null,
-      totalSales: product.totalSales || 0,
+      affiliateLink: String(product.affiliateLink || product.promotion_link || finalUrl || ''),
+      rating: product.rating || product.evaluate_rate || null,
+      totalSales: product.totalSales || product.lastest_volume || 0,
       trustScore: product.trustScore || 0,
-      storeUrl: String(product.storeUrl || ''),
-      commissionRate: String(product.commissionRate || ''),
-      category: product.category || detectCategory(product.title),
+      storeUrl: String(product.storeUrl || product.shop_url || ''),
+      commissionRate: String(product.commissionRate || product.commission_rate || ''),
+      category: product.category || detectCategory(product.title || product.product_title),
       shippingSpeed: product.shippingSpeed || 'standard',
       relevanceScore: product.relevanceScore || 0,
       marketPosition: product.marketPosition || 'mid',
       shippingCost: shippingCostNum,
-      isChoiceItem: product.isChoiceItem || false,
-      itemUrl: String(product.itemUrl || ''),
+      isChoiceItem: product.isChoiceItem || product.is_choice_item || false,
+      itemUrl: String(product.itemUrl || product.product_detail_url || ''),
       priorityScore: priorityScore
     };
   });
@@ -494,17 +501,21 @@ function enrichMinimal(products) {
     // Calculate priority score (even in minimal mode for sorting)
     const priorityScore = calculatePriorityScore(product);
 
-    // Immutable Core + Enrichment Fields (per spec §2)
-    // Minimal mode includes relevanceScore for client-side filtering
+    // SPREAD: Include ALL raw fields plus minimal essential fields
+    // Extension's normalizeProduct will handle field mapping
     result[i] = {
-      title: String(product.title || '').substring(0, 200),
-      price: String(product.price || ''),
-      imgUrl: normalizeImageUrl(product.productImage || product.imageUrl || ''),
-      affiliateLink: String(product.affiliateLink || finalUrl || ''),
+      // Raw AliExpress fields (pass-through)
+      ...product,
+      
+      // Minimal essential fields (may override raw fields)
+      title: String(product.title || product.product_title || '').substring(0, 200),
+      price: String(product.price || product.sale_price || ''),
+      imgUrl: normalizeImageUrl(product.productImage || product.product_main_image_url || product.imageUrl || ''),
+      affiliateLink: String(product.affiliateLink || product.promotion_link || finalUrl || ''),
       discountPct: product.discountPct || 0,
       shippingCost: shippingCostNum,
-      isChoiceItem: product.isChoiceItem || false,
-      itemUrl: String(product.itemUrl || ''),
+      isChoiceItem: product.isChoiceItem || product.is_choice_item || false,
+      itemUrl: String(product.itemUrl || product.product_detail_url || ''),
       priorityScore: priorityScore,
       relevanceScore: product.relevanceScore || 0
     };

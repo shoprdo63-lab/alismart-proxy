@@ -91,21 +91,26 @@ if (!shouldSkipCache) {
     console.log('[Visual Search] Enriching products...');
     const { enrichedProducts } = analyzeNiche(visualProducts, '');
 
-    // Add affiliate links
+    // Add affiliate links - SPREAD all raw AliExpress fields
+    // Extension's normalizeProduct will handle field mapping
     const finalProducts = enrichedProducts.map(p => ({
-      productId: String(p.productId || ''),
-      title: String(p.title || '').substring(0, 200),
-      price: String(p.price || ''),
-      originalPrice: String(p.originalPrice || ''),
+      // Raw AliExpress fields (pass-through)
+      ...p,
+      
+      // Normalized fields (may override raw fields)
+      productId: String(p.productId || p.product_id || ''),
+      title: String(p.title || p.product_title || '').substring(0, 200),
+      price: String(p.price || p.sale_price || ''),
+      originalPrice: String(p.originalPrice || p.original_price || ''),
       discountPct: p.discountPct || 0,
-      imgUrl: normalizeImageUrl(p.productImage || p.imageUrl || ''),
-      productUrl: String(p.itemUrl || ''),
-      affiliateLink: String(p.affiliateLink || p.itemUrl || ''),
-      rating: p.rating || null,
-      totalSales: p.totalSales || 0,
-      storeUrl: String(p.storeUrl || ''),
-      storeName: String(p.storeName || ''),
-      isChoiceItem: p.isChoiceItem || false,
+      imgUrl: normalizeImageUrl(p.productImage || p.product_main_image_url || p.imageUrl || ''),
+      productUrl: String(p.itemUrl || p.product_detail_url || ''),
+      affiliateLink: String(p.affiliateLink || p.promotion_link || p.itemUrl || ''),
+      rating: p.rating || p.evaluate_rate || null,
+      totalSales: p.totalSales || p.lastest_volume || 0,
+      storeUrl: String(p.storeUrl || p.shop_url || ''),
+      storeName: String(p.storeName || p.store_name || ''),
+      isChoiceItem: p.isChoiceItem || p.is_choice_item || false,
       isHotProduct: p.isHotProduct || false,
       isPromoProduct: p.isPromoProduct || false,
       // Visual search specific
