@@ -423,6 +423,7 @@ async function fetchWithGlobalFallback(url, options = {}) {
   
   try {
     console.log(`[fetchWithGlobalFallback] Requesting with locale=${locale}, currency=${currency}, region=${region || 'auto'}`);
+    console.log(`[fetchWithGlobalFallback] Cookie header: ${headers.Cookie}`);
     
     const response = await axios.get(url, {
       headers,
