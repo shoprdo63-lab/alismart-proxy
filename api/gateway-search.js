@@ -12,29 +12,6 @@
 const { searchByKeywords, getProductDetails, getIdsByImage } = require('../services/aliexpress-gateway.js');
 const cache = require('../services/redis-cache.js');
 
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean);
-const EXTENSION_ID = process.env.EXTENSION_ID || '';
-
-/**
- * Apply CORS headers
- */
-function applyCORS(res, req) {
-  const origin = req.headers.origin || '';
-  
-  // Check if origin is allowed
-  const isAllowed = ALLOWED_ORIGINS.includes(origin) || 
-    (EXTENSION_ID && origin === `chrome-extension://${EXTENSION_ID}`) ||
-    ALLOWED_ORIGINS.includes('*');
-  
-  if (isAllowed) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-  }
-  
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept-Language, X-User-Agent');
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
-}
-
 /**
  * API Gateway Handler
  * POST /api/gateway-search
@@ -48,18 +25,16 @@ function applyCORS(res, req) {
  * - shipToCountry: string (e.g., 'US', 'IL', 'GB') - default: 'US'
  * - limit: number - default: 50
  */
-module.exports = async function handler(req, res) {
-  applyCORS(res, req);
-  
+export default async function handler(req, res) {
+  // חייב לאפשר OPTIONS עבור ה-Preflight של הדפדפן
   if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-User-Agent');
     return res.status(200).end();
   }
-  
+
   if (req.method !== 'POST') {
-    return res.status(405).json({
-      success: false,
-      error: 'Method not allowed. Use POST.'
-    });
+    return res.status(405).json({ error: 'חייב לשלוח ב-POST' });
   }
 
   const executionStart = Date.now();
