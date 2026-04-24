@@ -37,6 +37,9 @@ module.exports = async function handler(req, res) {
     _t = ''
   } = req.query;
 
+  // Extract client's User-Agent for passthrough to make requests look human
+  const clientUserAgent = req.headers['user-agent'] || '';
+
   if (!imageUrl || !imageUrl.trim()) {
     return res.status(400).json({
       success: false,
@@ -67,9 +70,10 @@ if (!shouldSkipCache) {
     console.log(`🖼️ Locale: ${locale}`);
     console.log(`🖼️ Currency: ${currency}`);
     console.log(`🖼️ Region: ${region || 'auto'}`);
+    console.log(`🖼️ Client UA: ${clientUserAgent ? 'present' : 'none'}`);
     console.log('🖼️ ============================================\n');
 
-    // Perform enhanced visual search with locale support
+    // Perform enhanced visual search with locale support and User-Agent passthrough
     const searchStart = Date.now();
     const { 
       products: visualProducts, 
@@ -83,7 +87,8 @@ if (!shouldSkipCache) {
       includePromoProducts: includePromo === 'true',
       locale: locale,
       currency: currency,
-      region: region
+      region: region,
+      userAgent: clientUserAgent  // Pass client's User-Agent for human-like requests
     });
     const searchTime = Date.now() - searchStart;
 
@@ -91,37 +96,47 @@ if (!shouldSkipCache) {
     console.log('[Visual Search] Enriching products...');
     const { enrichedProducts } = analyzeNiche(visualProducts, '');
 
-    // Add affiliate links - SPREAD all raw AliExpress fields
-    // Extension's normalizeProduct will handle field mapping
-    const finalProducts = enrichedProducts.map(p => ({
-      // Raw AliExpress fields (pass-through)
-      ...p,
+    // Normalize and clean products for response
+    // Server returns ONLY data - no image scraping. Client handles image display via CDN.
+    const finalProducts = enrichedProducts.map(p => {
+      const productId = String(p.productId || p.product_id || '');
+      const rawImageUrl = p.productImage || p.product_main_image_url || p.imageUrl || '';
+      const cleanImageUrl = normalizeImageUrl(rawImageUrl, productId);
       
-      // Normalized fields (may override raw fields)
-      productId: String(p.productId || p.product_id || ''),
-      title: String(p.title || p.product_title || '').substring(0, 200),
-      price: String(p.price || p.sale_price || ''),
-      originalPrice: String(p.originalPrice || p.original_price || ''),
-      discountPct: p.discountPct || 0,
-      imgUrl: normalizeImageUrl(p.productImage || p.product_main_image_url || p.imageUrl || ''),
-      productUrl: String(p.itemUrl || p.product_detail_url || ''),
-      affiliateLink: String(p.affiliateLink || p.promotion_link || p.itemUrl || ''),
-      rating: p.rating || p.evaluate_rate || null,
-      totalSales: p.totalSales || p.lastest_volume || 0,
-      storeUrl: String(p.storeUrl || p.shop_url || ''),
-      storeName: String(p.storeName || p.store_name || ''),
-      isChoiceItem: p.isChoiceItem || p.is_choice_item || false,
-      isHotProduct: p.isHotProduct || false,
-      isPromoProduct: p.isPromoProduct || false,
-      // Visual search specific
-      visualMatchScore: p.visualMatchScore || 0,
-      clusterId: p.clusterId || '',
-      clusterSize: p.clusterSize || 1,
-      similarProductsCount: p.similarProductsCount || 0,
-      priceRange: p.priceRange || null,
-      isAlternative: p.isAlternative || false,
-      source: p.source || 'unknown'
-    }));
+      return {
+        // CORE FIELDS - Always present (normalized)
+        productId: productId,
+        title: String(p.title || p.product_title || '').substring(0, 200),
+        price: String(p.price || p.sale_price || ''),
+        originalUrl: String(p.itemUrl || p.product_detail_url || ''),  // Direct product URL
+        
+        // IMAGE HANDLING: Server returns CDN URL pattern, client loads directly from CDN
+        // No server-side image scraping to prevent bot detection
+        imgUrl: cleanImageUrl,  // Cleaned URL (s.click links removed)
+        cdnImageUrl: generateCdnImageUrl(productId),  // Direct CDN pattern for client
+        
+        // Additional fields
+        originalPrice: String(p.originalPrice || p.original_price || ''),
+        discountPct: p.discountPct || p.discount || 0,
+        affiliateLink: String(p.affiliateLink || p.promotion_link || ''),  // Client handles this
+        rating: p.rating || p.evaluate_rate || null,
+        totalSales: p.totalSales || p.lastest_volume || 0,
+        storeUrl: String(p.storeUrl || p.shop_url || ''),
+        storeName: String(p.storeName || p.store_name || ''),
+        isChoiceItem: p.isChoiceItem || p.is_choice_item || false,
+        isHotProduct: p.isHotProduct || false,
+        isPromoProduct: p.isPromoProduct || false,
+        
+        // Visual search specific
+        visualMatchScore: p.visualMatchScore || 0,
+        clusterId: p.clusterId || '',
+        clusterSize: p.clusterSize || 1,
+        similarProductsCount: p.similarProductsCount || 0,
+        priceRange: p.priceRange || null,
+        isAlternative: p.isAlternative || false,
+        source: p.source || 'unknown'
+      };
+    });
 
     const totalTime = Date.now() - executionStart;
 
@@ -163,12 +178,12 @@ if (!shouldSkipCache) {
       const savings = calculateSavings(response, minifiedPayload);
       console.log(`[Visual Search] JSON Minification: ${savings.originalBytes} → ${savings.minifiedBytes} bytes (${savings.ratio} saved)`);
       
-      cache.set(cacheKey, minifiedPayload, 3600); // 1 hour cache
+      cache.set(cacheKey, minifiedPayload, 600); // 10 minute cache for rate limiting
       return res.status(200).json(minifiedPayload);
     }
 
-    // Cache for 1 hour
-    cache.set(cacheKey, response, 3600);
+    // Cache for 10 minutes to prevent rate limiting while keeping data fresh
+    cache.set(cacheKey, response, 600);
 
     return res.status(200).json(response);
 
@@ -182,10 +197,37 @@ if (!shouldSkipCache) {
   }
 };
 
-function normalizeImageUrl(url) {
+function normalizeImageUrl(url, productId = '') {
   if (!url) return '';
   let normalized = String(url);
+  
+  // Handle protocol-relative URLs
   if (normalized.startsWith('//')) normalized = 'https:' + normalized;
   if (normalized.startsWith('http://')) normalized = normalized.replace('http://', 'https://');
+  
+  // DETECT and STRIP tracking/redirect URLs (s.click.aliexpress.com, etc.)
+  // These cause bot detection when followed by the server
+  if (normalized.includes('s.click.aliexpress.com') || 
+      normalized.includes('redirect') ||
+      normalized.includes('clk.') ||
+      normalized.includes('/go/') ||
+      normalized.includes('affiliate')) {
+    // Return empty or generate CDN URL if we have productId
+    console.log(`[Image Normalization] Stripped tracking URL: ${normalized.substring(0, 50)}...`);
+    normalized = '';
+  }
+  
   return normalized;
+}
+
+/**
+ * Generate direct CDN image URL from product ID
+ * Client should use this to display images without server-side scraping
+ * @param {string} productId - AliExpress product ID
+ * @returns {string} Direct CDN URL
+ */
+function generateCdnImageUrl(productId) {
+  if (!productId) return '';
+  // AliExpress CDN pattern - client can use this directly
+  return `https://ae01.alicdn.com/kf/${productId}.jpg`;
 }

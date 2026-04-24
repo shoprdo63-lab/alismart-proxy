@@ -33,6 +33,7 @@ async function visualSearchEnhanced(imageUrl, options = {}) {
   console.log(`🔍 [Visual Search] Locale: ${options.locale || 'en'}`);
   console.log(`🔍 [Visual Search] Currency: ${options.currency || 'USD'}`);
   console.log(`🔍 [Visual Search] Region: ${options.region || 'auto'}`);
+  console.log(`🔍 [Visual Search] User-Agent: ${options.userAgent ? 'custom' : 'default'}`);
   
   const {
     targetResults = 50,
@@ -42,7 +43,8 @@ async function visualSearchEnhanced(imageUrl, options = {}) {
     similarityThreshold = 0.85,
     locale = 'en',
     currency = 'USD',
-    region = ''
+    region = '',
+    userAgent = ''
   } = options;
 
   const allProducts = [];
@@ -56,7 +58,7 @@ async function visualSearchEnhanced(imageUrl, options = {}) {
 
   // Stage 1: Initial Visual Search (from AliExpress scraping)
   console.log('[Visual Search] Stage 1: Getting initial visual matches...');
-  const visualResults = await getVisualMatchesFromAliExpress(imageUrl, locale, currency, region);
+  const visualResults = await getVisualMatchesFromAliExpress(imageUrl, locale, currency, region, userAgent);
   
   if (visualResults.length === 0) {
     console.log('[Visual Search] No visual matches found');
@@ -253,10 +255,11 @@ async function visualSearchEnhanced(imageUrl, options = {}) {
  * @param {string} locale - User locale (e.g., 'en', 'es', 'fr')
  * @param {string} currency - User currency (e.g., 'USD', 'ILS', 'EUR')
  * @param {string} region - User region code (e.g., 'IL', 'US', 'ES')
+ * @param {string} userAgent - Client User-Agent for human-like requests
  */
-async function getVisualMatchesFromAliExpress(imageUrl, locale = 'en', currency = 'USD', region = '') {
+async function getVisualMatchesFromAliExpress(imageUrl, locale = 'en', currency = 'USD', region = '', userAgent = '') {
   const { getIdsByImage } = require('./aliexpress.js');
-  const result = await getIdsByImage(imageUrl, { locale, currency, region });
+  const result = await getIdsByImage(imageUrl, { locale, currency, region, userAgent });
   return result.productIds.map(id => ({ productId: id }));
 }
 

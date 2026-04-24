@@ -360,9 +360,10 @@ function getUserAgent(lang = 'en') {
  * @param {string} currency - Currency code
  * @param {string} region - Region code (optional, extracted from locale if not provided)
  * @param {string} domain - AliExpress domain
+ * @param {string} customUserAgent - Optional custom User-Agent from client
  * @returns {Object} Headers object
  */
-function buildAliExpressHeaders(locale = 'en', currency = 'USD', region = '', domain = 'www.aliexpress.com') {
+function buildAliExpressHeaders(locale = 'en', currency = 'USD', region = '', domain = 'www.aliexpress.com', customUserAgent = '') {
   // Parse locale to extract language and region
   const { lang, region: localeRegion } = parseLocale(locale);
   
@@ -372,7 +373,8 @@ function buildAliExpressHeaders(locale = 'en', currency = 'USD', region = '', do
   
   const acceptLang = buildAcceptLanguageHeader(lang);
   const currencyCode = getCurrencyParam(currency);
-  const userAgent = getUserAgent(lang);
+  // Use custom User-Agent if provided (from client), otherwise use default
+  const userAgent = customUserAgent && customUserAgent.trim() ? customUserAgent.trim() : getUserAgent(lang);
   
   // Build cookie string with AliExpress global format
   // aep_usuc_f format: is_site_glo=y&region=ES&site=glo&b_locale=es_ES&curr=EUR
@@ -421,9 +423,10 @@ async function fetchWithGlobalFallback(url, options = {}) {
   const currency = options.currency || 'USD';
   const region = options.region || '';
   const domain = options.domain || getAliExpressDomain(locale);
+  const userAgent = options.userAgent || '';
   
-  // Build headers with full localization
-  const headers = buildAliExpressHeaders(locale, currency, region, domain);
+  // Build headers with full localization and custom User-Agent
+  const headers = buildAliExpressHeaders(locale, currency, region, domain, userAgent);
   
   try {
     console.log(`[fetchWithGlobalFallback] Requesting with locale=${locale}, currency=${currency}, region=${region || 'auto'}`);
@@ -432,9 +435,10 @@ async function fetchWithGlobalFallback(url, options = {}) {
     const response = await axios.get(url, {
       headers,
       timeout: 10000,
-      maxRedirects: 5,
+      maxRedirects: 0,  // DISABLED: Don't follow redirects - prevents bot detection from affiliate links
       responseType: 'text',
-      responseEncoding: 'utf8'
+      responseEncoding: 'utf8',
+      validateStatus: (status) => status < 400 || status === 302 || status === 301  // Allow redirect responses
     });
     
     return {
@@ -455,15 +459,16 @@ async function fetchWithGlobalFallback(url, options = {}) {
       console.log(`[fetchWithGlobalFallback] ⚠️ Blocked (${status}) with ${locale}/${currency}/${region || 'auto'}, trying Global Fallback (en/USD/US)...`);
       
       const fallbackDomain = 'www.aliexpress.com';
-      const fallbackHeaders = buildAliExpressHeaders('en', 'USD', 'US', fallbackDomain);
+      const fallbackHeaders = buildAliExpressHeaders('en', 'USD', 'US', fallbackDomain, userAgent);
       
       try {
         const fallbackResponse = await axios.get(url, {
           headers: fallbackHeaders,
           timeout: 10000,
-          maxRedirects: 5,
+          maxRedirects: 0,  // DISABLED: Don't follow redirects - prevents bot detection
           responseType: 'text',
-          responseEncoding: 'utf8'
+          responseEncoding: 'utf8',
+          validateStatus: (status) => status < 400 || status === 302 || status === 301
         });
         
         console.log('[fetchWithGlobalFallback] ✅ Global Fallback succeeded');
@@ -500,6 +505,7 @@ async function fetchWithGlobalFallback(url, options = {}) {
  * @param {string} options.locale - User locale (e.g., 'en', 'es', 'fr', 'he')
  * @param {string} options.currency - User currency (e.g., 'USD', 'ILS', 'EUR')
  * @param {string} options.region - User region code (e.g., 'IL', 'US', 'ES')
+ * @param {string} options.userAgent - Client User-Agent for human-like requests
  */
 async function getIdsByImage(imageUrl, options = {}) {
     try {
@@ -528,10 +534,11 @@ async function getIdsByImage(imageUrl, options = {}) {
         console.log('[getIdsByImage] Original URL:', imageUrl.substring(0, 80) + '...');
         console.log('[getIdsByImage] Cleaned URL:', cleanImgUrl.substring(0, 80) + '...');
 
-        // Determine locale, currency, region for visual search
+        // Determine locale, currency, region, userAgent for visual search
         const locale = options.locale || 'en';
         const currency = options.currency || 'USD';
         const region = options.region || '';
+        const userAgent = options.userAgent || '';
         
         // Parse language from locale for domain decision
         const { lang } = parseLocale(locale);
@@ -542,7 +549,7 @@ async function getIdsByImage(imageUrl, options = {}) {
         const apiDomain = getAliExpressDomain(locale);
         const refererDomain = isHebrew ? 'he.aliexpress.com' : 'www.aliexpress.com';
         
-        console.log(`[getIdsByImage] Using locale: ${locale}, currency: ${currency}, region: ${region || 'auto'}`);
+        console.log(`[getIdsByImage] Using locale: ${locale}, currency: ${currency}, region: ${region || 'auto'}, userAgent: ${userAgent ? 'custom' : 'default'}`);
         console.log(`[getIdsByImage] API domain: ${apiDomain}, Referer domain: ${refererDomain} (Hebrew: ${isHebrew})`);
         
         // Use locale-specific AliExpress visual search endpoint with currency parameter
@@ -551,7 +558,8 @@ async function getIdsByImage(imageUrl, options = {}) {
 
         // Use fetchWithGlobalFallback for automatic retry on 403/429
         // Pass refererDomain so headers use correct Referer/Origin
-        const result = await fetchWithGlobalFallback(url, { locale, currency, region, domain: refererDomain });
+        // Pass userAgent for human-like requests
+        const result = await fetchWithGlobalFallback(url, { locale, currency, region, domain: refererDomain, userAgent });
         
         // Log if fallback was used
         if (result.usedFallback) {
@@ -583,7 +591,8 @@ async function getIdsByImage(imageUrl, options = {}) {
                     locale: 'en_US', 
                     currency: 'USD', 
                     region: 'US', 
-                    domain: fallbackDomain 
+                    domain: fallbackDomain,
+                    userAgent
                 });
                 
                 const fallbackHtml = fallbackResult.data;
