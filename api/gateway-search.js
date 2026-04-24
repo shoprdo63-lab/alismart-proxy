@@ -25,9 +25,23 @@ const cache = require('../services/redis-cache.js');
  * - shipToCountry: string (e.g., 'US', 'IL', 'GB') - default: 'US'
  * - limit: number - default: 50
  */
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean);
+const EXTENSION_ID = process.env.EXTENSION_ID || '';
+
 export default async function handler(req, res) {
+  const origin = req.headers.origin || '';
+  
+  // בדיקת Origin מורשה
+  const isAllowed = ALLOWED_ORIGINS.includes(origin) || 
+    (EXTENSION_ID && origin === `chrome-extension://${EXTENSION_ID}`) ||
+    ALLOWED_ORIGINS.includes('*') ||
+    origin.startsWith('chrome-extension://');
+  
   // חייב לאפשר OPTIONS עבור ה-Preflight של הדפדפן
   if (req.method === 'OPTIONS') {
+    if (isAllowed) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+    }
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-User-Agent');
     return res.status(200).end();
@@ -35,6 +49,11 @@ export default async function handler(req, res) {
 
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'חייב לשלוח ב-POST' });
+  }
+  
+  // הוספת CORS לבקשה עצמה
+  if (isAllowed) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
   }
 
   const executionStart = Date.now();
@@ -120,11 +139,11 @@ export default async function handler(req, res) {
         
         // Check if we got a captcha/challenge response
         if (visualResults.status === 'requires_manual_search') {
-          return res.status(200).json({
-            success: true,
-            status: 'requires_manual_search',
+          return res.status(403).json({
+            success: false,
+            status: 'captcha_required',
+            error: 'AliExpress דורש אימות ידני. נסה שוב מאוחר יותר.',
             products: [],
-            message: 'Visual search requires manual verification. Please try again later.',
             executionTimeMs: Date.now() - executionStart
           });
         }
@@ -187,6 +206,21 @@ export default async function handler(req, res) {
 
   } catch (error) {
     console.error('[Gateway] Search error:', error);
+    
+    // בדיקת שגיאת קאפצ'ה מה-service
+    if (error.code === 'CAPTCHA_REQUIRED' || error.status === 403) {
+      return res.status(403).json({
+        success: false,
+        status: 'captcha_required',
+        error: error.message || 'AliExpress דורש אימות ידני',
+        localization: {
+          language,
+          currency,
+          shipToCountry
+        }
+      });
+    }
+    
     return res.status(500).json({
       success: false,
       error: 'Search failed',

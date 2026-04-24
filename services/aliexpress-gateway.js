@@ -107,6 +107,22 @@ async function searchByKeywords(keywords, options = {}) {
     return products.map(normalizeProduct);
   } catch (error) {
     console.error('[Gateway] Keyword search error:', error.message);
+    
+    // בדיקת קאפצ'ה או חסימה
+    const status = error.response?.status;
+    const responseData = JSON.stringify(error.response?.data || '');
+    
+    if (status === 403 || status === 401 || 
+        responseData.includes('captcha') || 
+        responseData.includes('challenge') ||
+        responseData.includes('verify') ||
+        error.message.includes('captcha')) {
+      const captchaError = new Error('AliExpress דורש אימות ידני (קאפצ\'ה)');
+      captchaError.status = 403;
+      captchaError.code = 'CAPTCHA_REQUIRED';
+      throw captchaError;
+    }
+    
     return [];
   }
 }
@@ -202,6 +218,21 @@ async function getProductDetails(productIds, options = {}) {
     return allProducts.map(normalizeProduct);
   } catch (error) {
     console.error('[Gateway] Product details error:', error.message);
+    
+    // בדיקת קאפצ'ה או חסימה
+    const status = error.response?.status;
+    const responseData = JSON.stringify(error.response?.data || '');
+    
+    if (status === 403 || status === 401 || 
+        responseData.includes('captcha') || 
+        responseData.includes('challenge') ||
+        responseData.includes('verify')) {
+      const captchaError = new Error('AliExpress דורש אימות ידני (קאפצ\'ה)');
+      captchaError.status = 403;
+      captchaError.code = 'CAPTCHA_REQUIRED';
+      throw captchaError;
+    }
+    
     return [];
   }
 }
