@@ -1,6 +1,7 @@
 /**
  * Redis Cache Service
  * Caching layer using Redis with 5-10 minute TTL for API rate limiting protection
+ * LAZY INITIALIZATION: Only connects when first operation is called
  */
 
 const Redis = require('ioredis');
@@ -13,12 +14,16 @@ const SHORT_TTL_SECONDS = 300;   // 5 minutes for frequently changing data
 /** @type {Redis | null} */
 let redis = null;
 let redisAvailable = false;
+let connectionAttempted = false;
 
 /**
- * Initialize Redis connection
+ * Initialize Redis connection - LAZY: only called on first operation
+ * Prevents server hanging during startup if Redis is unavailable
  */
 function initRedis() {
-  if (redis) return redis;
+  if (redis || connectionAttempted) return redis;
+  
+  connectionAttempted = true;
   
   if (!REDIS_URL) {
     console.log('[Redis] No REDIS_URL configured, using in-memory fallback');
@@ -26,14 +31,25 @@ function initRedis() {
   }
   
   try {
+    console.log('[Redis] Lazy initialization starting...');
+    
     redis = new Redis(REDIS_URL, {
       retryStrategy: (times) => {
-        const delay = Math.min(times * 50, 2000);
+        // Stop retrying after 3 attempts to prevent hanging
+        if (times > 3) {
+          console.log('[Redis] Max retries reached, giving up');
+          redisAvailable = false;
+          return null; // Stop retrying
+        }
+        const delay = Math.min(times * 100, 500);
+        console.log(`[Redis] Retry ${times}, delay ${delay}ms`);
         return delay;
       },
-      maxRetriesPerRequest: 3,
-      enableReadyCheck: true,
-      connectTimeout: 10000,
+      maxRetriesPerRequest: 2,
+      enableReadyCheck: false, // DISABLED: Don't wait for ready check
+      connectTimeout: 5000,      // REDUCED: 5 seconds max connection time
+      lazyConnect: true,       // ENABLED: Don't connect until first command
+      keepAlive: 30000,        // Keep connection alive
     });
     
     redis.on('connect', () => {
@@ -42,24 +58,24 @@ function initRedis() {
     });
     
     redis.on('error', (err) => {
-      console.error('[Redis] Connection error:', err.message);
+      // Only log critical errors, ignore connection noise
+      if (err.message && !err.message.includes('ECONNREFUSED')) {
+        console.error('[Redis] Error:', err.message);
+      }
       redisAvailable = false;
     });
     
     redis.on('close', () => {
-      console.log('[Redis] Connection closed');
       redisAvailable = false;
     });
     
     return redis;
   } catch (error) {
     console.error('[Redis] Failed to initialize:', error.message);
+    redisAvailable = false;
     return null;
   }
 }
-
-// Initialize on module load
-initRedis();
 
 /**
  * Generate a deterministic cache key
@@ -75,46 +91,74 @@ function generateCacheKey(prefix, identifier, params = {}) {
 }
 
 /**
- * Get cached value
+ * Get cached value with timeout protection
  * @param {string} key
+ * @param {number} timeoutMs - Max time to wait for Redis (default 1000ms)
  * @returns {Promise<any | null>}
  */
-async function get(key) {
-  if (!redis || !redisAvailable) {
-    return null;
-  }
+async function get(key, timeoutMs = 1000) {
+  const client = initRedis();
+  if (!client) return null;
   
-  try {
-    const value = await redis.get(key);
-    if (value) {
-      return JSON.parse(value);
+  // Race between Redis operation and timeout
+  const redisPromise = (async () => {
+    try {
+      // Ensure connection is established (lazy connect)
+      if (client.status === 'wait') {
+        await client.connect().catch(() => {});
+      }
+      
+      if (!redisAvailable) return null;
+      
+      const value = await client.get(key);
+      return value ? JSON.parse(value) : null;
+    } catch (error) {
+      return null;
     }
-    return null;
-  } catch (error) {
-    console.error('[Redis] GET error:', error.message);
-    return null;
-  }
+  })();
+  
+  const timeoutPromise = new Promise((resolve) => {
+    setTimeout(() => resolve(null), timeoutMs);
+  });
+  
+  return Promise.race([redisPromise, timeoutPromise]);
 }
 
 /**
- * Set cached value with TTL
+ * Set cached value with TTL and timeout protection
  * @param {string} key
  * @param {any} value
  * @param {number} ttlSeconds - Time to live in seconds (default: 600 = 10 minutes)
+ * @param {number} timeoutMs - Max time to wait for Redis (default 1000ms)
  */
-async function set(key, value, ttlSeconds = DEFAULT_TTL_SECONDS) {
-  if (!redis || !redisAvailable) {
-    return false;
-  }
+async function set(key, value, ttlSeconds = DEFAULT_TTL_SECONDS, timeoutMs = 1000) {
+  const client = initRedis();
+  if (!client) return false;
   
-  try {
-    const serialized = JSON.stringify(value);
-    await redis.setex(key, ttlSeconds, serialized);
-    return true;
-  } catch (error) {
-    console.error('[Redis] SET error:', error.message);
-    return false;
-  }
+  // Fire-and-forget with timeout - don't block if Redis is slow
+  const redisPromise = (async () => {
+    try {
+      // Ensure connection is established (lazy connect)
+      if (client.status === 'wait') {
+        await client.connect().catch(() => {});
+      }
+      
+      if (!redisAvailable) return false;
+      
+      const serialized = JSON.stringify(value);
+      await client.setex(key, ttlSeconds, serialized);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  })();
+  
+  const timeoutPromise = new Promise((resolve) => {
+    setTimeout(() => resolve(false), timeoutMs);
+  });
+  
+  // Don't await - let it happen in background if slow
+  return Promise.race([redisPromise, timeoutPromise]);
 }
 
 /**

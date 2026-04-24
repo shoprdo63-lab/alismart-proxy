@@ -112,7 +112,46 @@ async function searchByKeywords(keywords, options = {}) {
 }
 
 /**
+ * Fetch a single batch of products (max 20 per API limit)
+ * Internal helper for parallel batch fetching
+ */
+async function fetchProductBatch(batchIds, options, timestamp) {
+  const { language, currency, country, userAgent } = options;
+  
+  const params = {
+    method: 'aliexpress.affiliate.product.detail.get',
+    app_key: APP_KEY,
+    timestamp,
+    format: 'json',
+    v: '2.0',
+    sign_method: 'md5',
+    fields: 'product_id,product_title,product_main_image_url,product_detail_url,sale_price,original_price,promotion_link,evaluate_rate,lastest_volume,discount,commission_rate,shop_url,shipping_cost,is_choice_item,target_original_price,target_sale_price',
+    product_ids: batchIds.join(','),
+    tracking_id: TRACKING_ID,
+    target_language: language.toLowerCase(),
+    target_currency: currency.toUpperCase(),
+    country: country.toUpperCase()
+  };
+
+  params.sign = generateSign(params);
+
+  const queryString = Object.entries(params)
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join('&');
+
+  const response = await axios.get(`${API_URL}?${queryString}`, {
+    headers: buildHeaders(userAgent),
+    timeout: 15000
+  });
+
+  const data = response.data;
+  return data?.aliexpress_affiliate_product_detail_get_response?.resp_result?.result?.products?.product || [];
+}
+
+/**
  * Get product details by IDs using AliExpress Affiliate API
+ * Fetches in PARALLEL batches of 20 (API limit per request)
+ * Supports up to 50 products total (20+20+10 in parallel)
  * @param {string[]} productIds - Array of product IDs
  * @param {Object} options - Options
  * @param {string} options.language - Language code
@@ -134,48 +173,33 @@ async function getProductDetails(productIds, options = {}) {
     userAgent = ''
   } = options;
 
-  // Limit to 20 products per request (API limit)
-  const limitedIds = productIds.slice(0, 20);
+  // Limit total to 50 products for performance
+  const limitedIds = productIds.slice(0, 50);
+  
+  // Split into batches of 20 (API limit per request)
+  const batches = [];
+  for (let i = 0; i < limitedIds.length; i += 20) {
+    batches.push(limitedIds.slice(i, i + 20));
+  }
 
+  console.log(`[Gateway] Fetching ${limitedIds.length} products in ${batches.length} parallel batches (${language}/${currency}/${country})`);
+  
+  const startTime = Date.now();
   const now = new Date();
   const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
 
-  const params = {
-    method: 'aliexpress.affiliate.product.detail.get',
-    app_key: APP_KEY,
-    timestamp,
-    format: 'json',
-    v: '2.0',
-    sign_method: 'md5',
-    fields: 'product_id,product_title,product_main_image_url,product_detail_url,sale_price,original_price,promotion_link,evaluate_rate,lastest_volume,discount,commission_rate,shop_url,shipping_cost,is_choice_item,target_original_price,target_sale_price',
-    product_ids: limitedIds.join(','),
-    tracking_id: TRACKING_ID,
-    // Localization parameters
-    target_language: language.toLowerCase(),
-    target_currency: currency.toUpperCase(),
-    country: country.toUpperCase()
-  };
-
-  params.sign = generateSign(params);
-
-  const queryString = Object.entries(params)
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-    .join('&');
-
   try {
-    console.log(`[Gateway] Fetching ${limitedIds.length} products (${language}/${currency}/${country})`);
+    // Fetch all batches in PARALLEL for maximum speed
+    const batchPromises = batches.map(batch => fetchProductBatch(batch, { language, currency, country, userAgent }, timestamp));
+    const batchResults = await Promise.all(batchPromises);
+    
+    // Flatten results
+    const allProducts = batchResults.flat();
+    
+    const elapsed = Date.now() - startTime;
+    console.log(`[Gateway] Retrieved ${allProducts.length} products in ${elapsed}ms from ${batches.length} parallel batches`);
 
-    const response = await axios.get(`${API_URL}?${queryString}`, {
-      headers: buildHeaders(userAgent),
-      timeout: 20000
-    });
-
-    const data = response.data;
-    const products = data?.aliexpress_affiliate_product_detail_get_response?.resp_result?.result?.products?.product || [];
-
-    console.log(`[Gateway] Retrieved ${products.length} product details`);
-
-    return products.map(normalizeProduct);
+    return allProducts.map(normalizeProduct);
   } catch (error) {
     console.error('[Gateway] Product details error:', error.message);
     return [];
