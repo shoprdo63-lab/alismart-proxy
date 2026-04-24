@@ -47,7 +47,7 @@ function initRedis() {
       },
       maxRetriesPerRequest: 2,
       enableReadyCheck: false, // DISABLED: Don't wait for ready check
-      connectTimeout: 5000,      // REDUCED: 5 seconds max connection time
+      connectTimeout: 2000,      // REDUCED: 2 seconds max connection time - fail fast to API
       lazyConnect: true,       // ENABLED: Don't connect until first command
       keepAlive: 30000,        // Keep connection alive
     });
