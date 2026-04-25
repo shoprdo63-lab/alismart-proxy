@@ -4,11 +4,7 @@
     { "src": "api/*.js", "use": "@vercel/node" }
   ],
   "routes": [
-    { "src": "/api/gateway-search", "dest": "/api/gateway-search.js" },
-    { "src": "/api/search", "dest": "/api/search.js" },
-    { "src": "/api/massive-search", "dest": "/api/massive-search.js" },
-    { "src": "/api/visual-search", "dest": "/api/visual-search.js" },
-    { "src": "/api/optimizer/batch-lookup", "dest": "/api/optimizer/batch-lookup.js" },
-    { "src": "/api/optimizer/bundles", "dest": "/api/optimizer/bundles.js" }
+    { "src": "/api/translate", "dest": "/api/translate.js" },
+    { "src": "/api/affiliate", "dest": "/api/affiliate.js" }
   ]
 }
