@@ -6,8 +6,10 @@
  * - text: string (text to translate)
  * - targetLanguage: string (default: 'en')
  * 
- * Returns translated text or original if no translation service configured
+ * Uses Google Translate via @vitalets/google-translate-api (free, no API key needed)
  */
+
+import { translate } from '@vitalets/google-translate-api';
 
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean);
 const EXTENSION_ID = process.env.EXTENSION_ID || '';
@@ -47,16 +49,19 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Simple translation - if no API key, return original with indication
-    // You can integrate Google Translate, DeepL, or other service here
-    const translatedText = await translateText(text, targetLanguage);
+    console.log(`[Translate] Translating: "${text.substring(0, 50)}..." -> ${targetLanguage}`);
+    
+    const result = await translate(text, { to: targetLanguage });
+    
+    console.log(`[Translate] Success: "${result.text.substring(0, 50)}..."`);
     
     return res.status(200).json({
       success: true,
       originalText: text,
-      translatedText: translatedText,
+      translatedText: result.text,
+      detectedSourceLanguage: result.from.language.iso,
       targetLanguage,
-      isTranslated: translatedText !== text
+      isTranslated: result.text !== text
     });
   } catch (error) {
     console.error('[Translate] Error:', error.message);
@@ -66,22 +71,4 @@ export default async function handler(req, res) {
       message: error.message
     });
   }
-}
-
-/**
- * Simple translation function
- * For now, returns text as-is. Add your translation API here.
- */
-async function translateText(text, targetLanguage) {
-  // Placeholder: return original text
-  // To integrate a real translation service, add API key to env vars
-  // and implement the API call here
-  
-  // Example integration:
-  // if (process.env.GOOGLE_TRANSLATE_API_KEY) {
-  //   return await googleTranslate(text, targetLanguage);
-  // }
-  
-  console.log(`[Translate] ${text.substring(0, 50)}... -> ${targetLanguage} (placeholder)`);
-  return text; // Return as-is for now
 }
