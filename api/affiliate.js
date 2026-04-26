@@ -8,16 +8,16 @@
  * Returns affiliate link with tracking ID
  */
 
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean);
+const ALLOWED_ORIGINS = new Set((process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean));
 const EXTENSION_ID = process.env.EXTENSION_ID || '';
 const TRACKING_ID = process.env.ALI_TRACKING_ID || 'ali_smart_finder_v1';
 
 export default async function handler(req, res) {
   const origin = req.headers.origin || '';
-  
-  const isAllowed = ALLOWED_ORIGINS.includes(origin) || 
+
+  const isAllowed = ALLOWED_ORIGINS.has(origin) ||
     (EXTENSION_ID && origin === `chrome-extension://${EXTENSION_ID}`) ||
-    ALLOWED_ORIGINS.includes('*') ||
+    ALLOWED_ORIGINS.has('*') ||
     origin.startsWith('chrome-extension://');
   
   if (req.method === 'OPTIONS') {

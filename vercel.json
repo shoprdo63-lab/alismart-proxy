@@ -1,10 +1,29 @@
 {
   "version": 2,
-  "builds": [
-    { "src": "api/*.js", "use": "@vercel/node" }
+  "public": false,
+  "functions": {
+    "api/search.js": {
+      "maxDuration": 60,
+      "memory": 1024
+    },
+    "api/affiliate.js": {
+      "maxDuration": 10
+    },
+    "api/translate.js": {
+      "maxDuration": 30
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/$1" }
   ],
-  "routes": [
-    { "src": "/api/translate", "dest": "/api/translate.js" },
-    { "src": "/api/affiliate", "dest": "/api/affiliate.js" }
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "POST, OPTIONS" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type" }
+      ]
+    }
   ]
 }

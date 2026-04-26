@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Extension API Test</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 20px auto; padding: 20px; }
+    button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+    .success { color: green; }
+    .error { color: red; }
+    .info { color: blue; }
+    pre { background: #f5f5f5; padding: 10px; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>Test Extension Connection to Server</h1>
+  <p>Server: <code>https://alismart-api-v2.vercel.app</code></p>
+  
+  <button onclick="testGet()">Test GET Request</button>
+  <button onclick="testPost()">Test POST Request</button>
+  <button onclick="testHebrew()">Test Hebrew Search</button>
+  <button onclick="testProductUrl()">Test Product URL</button>
+  
+  <div id="results"></div>
+
+  <script>
+    const SERVER = 'https://alismart-api-v2.vercel.app';
+    const resultsDiv = document.getElementById('results');
+
+    function log(type, message, data) {
+      const div = document.createElement('div');
+      div.className = type;
+      div.innerHTML = `<strong>${type.toUpperCase()}:</strong> ${message}`;
+      if (data) {
+        const pre = document.createElement('pre');
+        pre.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+        div.appendChild(pre);
+      }
+      resultsDiv.appendChild(div);
+    }
+
+    async function testGet() {
+      resultsDiv.innerHTML = '';
+      log('info', 'Testing GET request...');
+      
+      try {
+        const url = `${SERVER}/api/search?q=headphones&language=en&currency=USD&shipToCountry=US&maxResults=3`;
+        log('info', `URL: ${url}`);
+        
+        const res = await fetch(url);
+        log('info', `Response status: ${res.status}`);
+        
+        const data = await res.json();
+        
+        if (data.success && data.count > 0) {
+          log('success', `✅ GET works! Found ${data.count} products from ${data.candidatePoolSize} candidates`);
+          log('info', 'First product:', data.products[0]);
+        } else if (data.success && data.count === 0) {
+          log('error', '⚠️ API returned success but 0 products', data);
+        } else {
+          log('error', '❌ API returned error', data);
+        }
+      } catch (err) {
+        log('error', `❌ GET failed: ${err.message}`);
+      }
+    }
+
+    async function testPost() {
+      resultsDiv.innerHTML = '';
+      log('info', 'Testing POST request...');
+      
+      try {
+        const body = {
+          keywords: 'wireless earbuds',
+          language: 'en',
+          currency: 'USD',
+          shipToCountry: 'US',
+          maxResults: 3,
+          candidatePoolSize: 2000
+        };
+        
+        log('info', `Request body:`, body);
+        
+        const res = await fetch(`${SERVER}/api/search`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        
+        log('info', `Response status: ${res.status}`);
+        
+        const data = await res.json();
+        
+        if (data.success && data.count > 0) {
+          log('success', `✅ POST works! Found ${data.count} products from ${data.candidatePoolSize} candidates`);
+          log('info', 'First product:', data.products[0]);
+        } else if (data.success && data.count === 0) {
+          log('error', '⚠️ API returned success but 0 products', data);
+        } else {
+          log('error', '❌ API returned error', data);
+        }
+      } catch (err) {
+        log('error', `❌ POST failed: ${err.message}`);
+      }
+    }
+
+    async function testHebrew() {
+      resultsDiv.innerHTML = '';
+      log('info', 'Testing Hebrew search...');
+      
+      try {
+        const url = `${SERVER}/api/search?q=${encodeURIComponent('אוזניות בלוטות')}&language=he&currency=ILS&shipToCountry=IL&maxResults=3`;
+        log('info', `URL: ${url}`);
+        
+        const res = await fetch(url);
+        log('info', `Response status: ${res.status}`);
+        
+        const data = await res.json();
+        
+        if (data.success && data.count > 0) {
+          log('success', `✅ Hebrew works! Found ${data.count} products from ${data.candidatePoolSize} candidates`);
+          log('info', 'Translated keywords:', data.translatedKeywords || '(none - already Hebrew in AliExpress)');
+          log('info', 'First product:', data.products[0]);
+        } else if (data.success && data.count === 0) {
+          log('error', '⚠️ API returned success but 0 products', data);
+        } else {
+          log('error', '❌ API returned error', data);
+        }
+      } catch (err) {
+        log('error', `❌ Hebrew test failed: ${err.message}`);
+      }
+    }
+
+    async function testProductUrl() {
+      resultsDiv.innerHTML = '';
+      log('info', 'Testing product URL extraction...');
+      
+      try {
+        const body = {
+          productUrl: 'https://www.amazon.com/Sony-WH-1000XM5-Wireless-Headphones/dp/B09XS7JWHH',
+          language: 'en',
+          currency: 'USD',
+          shipToCountry: 'US',
+          maxResults: 3,
+          candidatePoolSize: 2000
+        };
+        
+        log('info', `Request body:`, body);
+        
+        const res = await fetch(`${SERVER}/api/search`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        
+        log('info', `Response status: ${res.status}`);
+        
+        const data = await res.json();
+        
+        if (data.success && data.count > 0) {
+          log('success', `✅ Product URL works! Extracted keywords: "${data.originalKeywords}"`);
+          log('success', `Found ${data.count} similar products from ${data.candidatePoolSize} candidates`);
+          log('info', 'First product:', data.products[0]);
+        } else if (data.success && data.count === 0) {
+          log('error', '⚠️ API returned success but 0 products', data);
+        } else {
+          log('error', '❌ API returned error', data);
+        }
+      } catch (err) {
+        log('error', `❌ Product URL test failed: ${err.message}`);
+      }
+    }
+  </script>
+</body>
+</html>

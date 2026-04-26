@@ -1,6 +1,7 @@
 {
   "name": "alismart-proxy",
   "version": "2.0.0",
+  "type": "module",
   "scripts": {},
   "dependencies": {
     "@vitalets/google-translate-api": "^9.2.0"
