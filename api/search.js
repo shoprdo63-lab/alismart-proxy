@@ -334,9 +334,8 @@ async function fetchCandidatePool({ keywords, poolSize, aliLang, currency, shipT
     if (!waveAddedAny && waveErrors === results.length) {
       throw new Error(`All API requests failed. Last error: ${results.at(-1)?.reason?.message || 'unknown'}`);
     }
-    // If an entire wave produced no new products (but some succeeded empty),
-    // AliExpress has nothing more to give us — bail out instead of wasting calls.
-    if (!waveAddedAny) break;
+    // NOTE: Removed early stop (!waveAddedAny) to ensure we fetch from all pages
+    // AliExpress may return duplicates on some pages but new products on others
   }
 
   return Array.from(seen.values());
@@ -495,6 +494,8 @@ function normalizeProduct(p, fallbackCurrency) {
   const storeId = p.seller_id || p.store_id || '';
   const storeUrl = storeId ? `https://www.aliexpress.com/store/${storeId}` : '';
 
+  const imgUrl = p.product_main_image_url || '';
+  
   return {
     productId,
     title: (p.product_title || '').substring(0, 200),
@@ -502,7 +503,8 @@ function normalizeProduct(p, fallbackCurrency) {
     originalPrice: originalPriceStr,
     priceNumeric: salePriceNum,
     currency: p.target_original_price_currency || p.target_sale_price_currency || fallbackCurrency,
-    imgUrl: p.product_main_image_url || '',
+    imgUrl,                    // legacy field
+    imageUrl: imgUrl,         // extension expects this field
     productUrl: cleanUrl,
     affiliateLink,
     rating: Number.parseFloat(p.evaluation_score) || null,
