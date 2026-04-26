@@ -411,7 +411,17 @@ async function fetchProductPage({ keywords, pageNo, sort, aliLang, currency, shi
     console.log('[Search] No products found in response. Result keys:', result ? Object.keys(result) : 'no result');
     return [];
   }
-  return Array.isArray(list) ? list : [list];
+  
+  // Debug: Log first few product titles to verify relevance
+  const products = Array.isArray(list) ? list : [list];
+  if (products.length > 0) {
+    console.log('[Search] AliExpress returned', products.length, 'products. First 3 titles:');
+    products.slice(0, 3).forEach((p, i) => {
+      console.log(`  ${i + 1}. ${p.product_title?.substring(0, 60)}...`);
+    });
+  }
+  
+  return products;
 }
 
 // ─── Relevance Scoring ──────────────────────────────────────────
