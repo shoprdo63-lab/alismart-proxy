@@ -362,11 +362,11 @@ async function fetchProductPage({ keywords, pageNo, sort, aliLang, currency, shi
     method: 'aliexpress.affiliate.product.query',
     sign_method: 'md5',
     v: '2.0',
-    keywords,
+    keyWord: keywords,           // AliExpress requires keyWord with capital K
     page_no: String(pageNo),
     page_size: String(PAGE_SIZE),
     target_currency: currency,
-    target_language: aliLang,
+    target_language: aliLang,    // e.g., 'EN'
     tracking_id: TRACKING_ID
   };
 
@@ -392,10 +392,25 @@ async function fetchProductPage({ keywords, pageNo, sort, aliLang, currency, shi
     throw new Error(`AliExpress: ${data.error_response.msg || JSON.stringify(data.error_response)}`);
   }
 
+  // AliExpress API response structure varies - try multiple paths
   const result = data.aliexpress_affiliate_product_query_response;
+  
+  // Debug: log the actual response structure (remove in production)
+  if (!result) {
+    console.log('[Search] No aliexpress_affiliate_product_query_response in:', Object.keys(data));
+  }
+  
+  // Try multiple possible response paths
   const list = result?.resp_result?.result?.products?.product
-            || result?.products?.product;
-  if (!list) return [];
+            || result?.products?.product
+            || result?.resp_result?.result?.product
+            || data?.result?.products?.product
+            || data?.products?.product;
+            
+  if (!list) {
+    console.log('[Search] No products found in response. Result keys:', result ? Object.keys(result) : 'no result');
+    return [];
+  }
   return Array.isArray(list) ? list : [list];
 }
 
