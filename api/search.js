@@ -19,7 +19,7 @@ const DEFAULT_RESULTS = 50;            // when caller doesn't specify
 const MAX_CANDIDATE_POOL = 10000;      // upper bound of items we ever fetch
 const DEFAULT_CANDIDATE_POOL = 5000;   // sane default for relevance ranking
 const FETCH_CONCURRENCY = 8;           // parallel API requests per wave
-const RELEVANCE_THRESHOLD = 25;        // drop items scoring below this (0–100)
+const RELEVANCE_THRESHOLD = 35;        // drop items scoring below this (0–100)
 
 const SEARCH_CACHE_TTL = 1000 * 60 * 10;            // 10 minutes
 const TRANSLATION_CACHE_TTL = 1000 * 60 * 60 * 24;  // 24 hours
@@ -217,10 +217,11 @@ export default async function handler(req, res) {
     // relax the threshold progressively until we have targetCount products
     let filtered = normalized.filter(p => p.relevanceScore >= relevanceFloor);
 
-    // If not enough products pass the relevance threshold, relax it
+    // If not enough products pass the relevance threshold, relax it slightly
+    // but NOT below 15 to maintain quality (avoid USB chargers when searching for mics)
     if (filtered.length < targetCount && normalized.length > 0) {
-      // Try lower thresholds: 20, 15, 10, 5, 0
-      const thresholds = [20, 15, 10, 5, 0];
+      // Try lower thresholds but stop at 15 minimum for quality
+      const thresholds = [30, 25, 20, 15];
       for (const threshold of thresholds) {
         if (filtered.length >= targetCount) break;
         filtered = normalized.filter(p => p.relevanceScore >= threshold);
@@ -439,28 +440,60 @@ function tokenize(text) {
 }
 
 /**
- * Returns 0–100 relevance score: percent of query tokens present in the title,
- * with a phrase-match bonus and a position bonus when the title starts with a
- * query token. Designed to be deterministic, language-agnostic and fast.
+ * Returns 0–100 relevance score with weighted tokens:
+ * - High weight (25 points): brand/model tokens (>=4 chars, specific)
+ * - Medium weight (15 points): product type (microphone, mic, headset)
+ * - Low weight (8 points): generic features (usb, gaming, wireless)
+ * Requires at least one high-weight match for decent relevance.
  */
 function calcRelevance(queryTokens, title) {
   if (!queryTokens.length || !title) return 0;
   const t = title.toLowerCase();
   const titleTokens = new Set(tokenize(t));
-
-  let matched = 0;
+  
+  // Define token weights based on specificity
+  const genericWords = new Set(['usb', 'gaming', 'wireless', 'bluetooth', 'digital', 'portable', 'new', 'original', 'official']);
+  const productTypes = new Set(['microphone', 'mic', 'mics', 'headset', 'headphone', 'earphone', 'earbud', 'speaker']);
+  
+  let weightedScore = 0;
+  let maxPossibleScore = 0;
+  let hasBrandMatch = false;
+  
   for (const q of queryTokens) {
-    if (titleTokens.has(q)) matched++;
+    if (!titleTokens.has(q)) continue;
+    
+    // Determine token weight
+    let weight;
+    if (genericWords.has(q)) {
+      weight = 8;  // Generic features - low weight
+    } else if (productTypes.has(q)) {
+      weight = 20; // Product category - high weight
+    } else if (q.length >= 4) {
+      weight = 25; // Brand/model names (longer, specific) - highest weight
+      hasBrandMatch = true;
+    } else {
+      weight = 15; // Other tokens - medium weight
+    }
+    
+    weightedScore += weight;
+    maxPossibleScore += 25; // Normalize against max possible
   }
-  let score = (matched / queryTokens.length) * 100;
-
-  // Bonus: title starts with first query token (likely the head noun)
-  if (queryTokens[0] && t.startsWith(queryTokens[0])) score += 5;
-
-  // Bonus: at least one adjacent pair of query tokens appears verbatim
+  
+  // Convert to 0-100 scale
+  let score = maxPossibleScore > 0 ? (weightedScore / maxPossibleScore) * 100 : 0;
+  
+  // Bonus: title starts with first query token (likely the brand)
+  if (queryTokens[0] && t.startsWith(queryTokens[0])) score += 10;
+  
+  // Bonus: adjacent phrase match
   for (let i = 0; i < queryTokens.length - 1; i++) {
     const phrase = `${queryTokens[i]} ${queryTokens[i + 1]}`;
-    if (t.includes(phrase)) { score += 8; break; }
+    if (t.includes(phrase)) { score += 15; break; }
+  }
+  
+  // Penalty: if no brand/model match and score is low, reduce further
+  if (!hasBrandMatch && score < 40) {
+    score = score * 0.5; // Heavy penalty for generic matches only
   }
 
   return Math.min(100, Math.round(score * 10) / 10);
