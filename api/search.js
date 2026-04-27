@@ -700,60 +700,6 @@ function calcTrust(p, maxSales) {
   return Math.round(score * 10) / 10;
 }
 
-// ─── Mock Data Generator (for testing when API is down) ─────────
-function generateMockProducts(count, productId, currency) {
-  const products = [];
-  const categories = [
-    'Premium Wireless Headphones',
-    'Smart Watch Pro',
-    'Bluetooth Speaker',
-    'Wireless Charger',
-    'Phone Case Premium',
-    'USB-C Cable Fast Charging',
-    'Power Bank 20000mAh',
-    'Smart Home Camera',
-    'Fitness Tracker',
-    'Wireless Mouse',
-    'Mechanical Keyboard',
-    'Gaming Headset',
-    'Tablet Stand',
-    'Car Phone Holder',
-    'LED Desk Lamp'
-  ];
-  
-  for (let i = 0; i < count; i++) {
-    const baseId = productId ? String(productId).slice(0, 6) : '100500';
-    const mockId = baseId + String(i).padStart(6, '0');
-    const category = categories[i % categories.length];
-    const price = (Math.random() * 50 + 10).toFixed(2);
-    const originalPrice = (parseFloat(price) * 1.3).toFixed(2);
-    
-    const productUrl = `https://www.aliexpress.com/item/${mockId}.html`;
-    const affiliateLink = `https://s.click.aliexpress.com/deep_link.htm?aff_short_key=${TRACKING_ID}&dl_target_url=${encodeURIComponent(productUrl)}`;
-    
-    products.push({
-      productId: mockId,
-      title: `${category} - Model ${i + 1} (Similar to ${productId})`,
-      price: `$${price}`,
-      originalPrice: `$${originalPrice}`,
-      priceNumeric: parseFloat(price),
-      currency: currency,
-      imgUrl: `https://ae-pic-a1.aliexpress-media.com/kf/H${mockId}.jpg`,
-      imageUrl: `https://ae-pic-a1.aliexpress-media.com/kf/H${mockId}.jpg`,
-      productUrl: productUrl,
-      affiliateLink: affiliateLink,
-      rating: (3.5 + Math.random() * 1.5).toFixed(1),
-      totalSales: Math.floor(Math.random() * 5000) + 100,
-      storeName: `Store ${i + 1}`,
-      storeId: `Store${i}`,
-      storeUrl: `https://www.aliexpress.com/store/${i}`,
-      discountPct: Math.floor(Math.random() * 30) + 5
-    });
-  }
-  
-  return products;
-}
-
 // ─── Normalization ──────────────────────────────────────────────
 function normalizeProduct(p, fallbackCurrency) {
   const productId = p.product_id;
