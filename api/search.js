@@ -557,16 +557,36 @@ async function fetchSimilarProducts({ productId, maxResults, aliLang, currency }
   const productResult = detailData.aliexpress_affiliate_productdetail_get_response;
   const product = productResult?.resp_result?.result || productResult?.result;
   
-  if (!product) {
-    console.log('[Similar] Could not fetch product details');
-    return [];
+  let keywords;
+  
+  if (product && product.product_title) {
+    // Product found in affiliate API - use its title
+    const title = product.product_title;
+    keywords = title.split(' ').slice(0, 5).join(' '); // First 5 words
+    console.log('[Similar] Product title:', title.substring(0, 60));
+    console.log('[Similar] Searching with keywords:', keywords);
+  } else {
+    // Product NOT found in affiliate API - use generic category search
+    // This ensures we always return similar products that ARE in the affiliate program
+    console.log('[Similar] Product not in affiliate program, using category fallback');
+    
+    // Try multiple common product categories to find similar items
+    const fallbackKeywords = [
+      'headphones', 'earphones', 'bluetooth headset',  // Audio
+      'wireless earbuds', 'gaming headset', 'microphone', // More audio
+      'smart watch', 'phone accessories', 'charger',    // Electronics
+      'cable', 'adapter', 'power bank'                   // Accessories
+    ];
+    
+    // Return all results from fallback searches
+    return await searchFallbackCategories({
+      productId,
+      maxResults,
+      aliLang,
+      currency,
+      fallbackKeywords
+    });
   }
-
-  // Extract keywords from product title
-  const title = product.product_title || '';
-  const keywords = title.split(' ').slice(0, 5).join(' '); // First 5 words
-  console.log('[Similar] Product title:', title.substring(0, 60));
-  console.log('[Similar] Searching with keywords:', keywords);
 
   // Step 2: Search for similar products using the keywords
   const searchParams = {
@@ -619,6 +639,83 @@ async function fetchSimilarProducts({ productId, maxResults, aliLang, currency }
   console.log('[Similar] Found', filtered.length, 'similar products for', productId);
 
   return filtered;
+}
+
+// ─── Fallback Category Search ───────────────────────────────────
+// When a product is not in the affiliate program, search multiple categories
+// to find similar products that ARE in the program
+async function searchFallbackCategories({ productId, maxResults, aliLang, currency, fallbackKeywords }) {
+  console.log('[Similar] Searching fallback categories:', fallbackKeywords.length, 'keywords');
+  
+  const allProducts = [];
+  const seenIds = new Set();
+  const productsPerKeyword = Math.ceil((maxResults || 50) / 3); // Split results across keywords
+  
+  // Try up to 3 keywords to find enough products
+  const keywordsToTry = fallbackKeywords.slice(0, 3);
+  
+  for (const keyword of keywordsToTry) {
+    if (allProducts.length >= maxResults) break;
+    
+    try {
+      const searchParams = {
+        app_key: APP_KEY,
+        timestamp: getChinaTimestamp(),
+        method: 'aliexpress.affiliate.product.query',
+        sign_method: 'md5',
+        v: '2.0',
+        keyWord: keyword,
+        page_no: '1',
+        page_size: String(Math.min(productsPerKeyword + 5, 50)), // Get a few extra for filtering
+        target_currency: currency,
+        target_language: aliLang,
+        tracking_id: TRACKING_ID
+      };
+
+      searchParams.sign = generateSignature(searchParams, APP_SECRET);
+
+      const searchQuery = Object.keys(searchParams)
+        .sort((a, b) => a.localeCompare(b))
+        .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(searchParams[k])}`)
+        .join('&');
+
+      const searchResponse = await fetch(`${API_GATEWAY}?${searchQuery}`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' }
+      });
+
+      if (!searchResponse.ok) continue;
+
+      const searchData = await searchResponse.json();
+      if (searchData.error_response) continue;
+
+      const result = searchData.aliexpress_affiliate_product_query_response;
+      const list = result?.resp_result?.result?.products?.product
+                || result?.products?.product
+                || [];
+
+      if (list && list.length > 0) {
+        const products = Array.isArray(list) ? list : [list];
+        
+        // Add unique products (not the original productId)
+        for (const p of products) {
+          const pid = String(p.product_id);
+          if (pid !== String(productId) && !seenIds.has(pid)) {
+            seenIds.add(pid);
+            allProducts.push(p);
+            if (allProducts.length >= maxResults) break;
+          }
+        }
+        
+        console.log('[Similar] Keyword', keyword, 'found', products.length, 'products, total unique:', allProducts.length);
+      }
+    } catch (err) {
+      console.log('[Similar] Error searching keyword', keyword, ':', err.message);
+    }
+  }
+  
+  console.log('[Similar] Fallback search found total', allProducts.length, 'unique products');
+  return allProducts;
 }
 
 // ─── Relevance Scoring ──────────────────────────────────────────
