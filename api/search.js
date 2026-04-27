@@ -1049,6 +1049,12 @@ function findMainProductWord(title) {
   
   // Priority list of main product categories
   const mainCategories = [
+    // Electric Mobility (high priority)
+    { word: 'electric scooter', patterns: [/electric scooter/, /e-scooter/, /escooter/, /dualtron/, /xiaomi m365/, /ninebot/, /segway/, /kaabo/, /nanrobot/, /zero scooter/, /speedway/] },
+    { word: 'hoverboard', patterns: [/hoverboard/, /self balancing scooter/, /self-balancing/] },
+    { word: 'electric bike', patterns: [/electric bike/, /e-bike/, /ebike/, /electric bicycle/, /electric motorcycle/] },
+    { word: 'electric unicycle', patterns: [/electric unicycle/, /euc/, /onewheel/, /self balancing unicycle/] },
+    { word: 'scooter', patterns: [/scooter/, /kick scooter/, /push scooter/] },
     // Electronics
     { word: 'headphone', patterns: [/headphone/, /earphone/, /earbud/, /headset/] },
     { word: 'speaker', patterns: [/speaker/, /bluetooth speaker/, /subwoofer/] },
@@ -1144,6 +1150,47 @@ function generateSynonymSearches(title) {
       { name: 'chess_set', keywords: 'chess set' },
       { name: 'chess_board', keywords: 'chess board' },
       { name: 'game_set', keywords: 'game set' }
+    );
+  }
+  
+  // Electric Scooters & Mobility synonyms
+  if (/\b(electric scooter|e-scooter|escooter|dualtron|xiaomi|ninebot|segway|kaabo|nanrobot|zero|speedway)\b/.test(lower)) {
+    searches.push(
+      { name: 'electric_scooter', keywords: 'electric scooter' },
+      { name: 'e_scooter', keywords: 'e-scooter' },
+      { name: 'escooter', keywords: 'escooter' },
+      { name: 'electric_mobility', keywords: 'electric mobility' },
+      { name: 'scooter_adult', keywords: 'adult electric scooter' },
+      { name: 'scooter_powerful', keywords: 'powerful scooter' },
+      { name: 'dualtron_parts', keywords: 'dualtron parts' },
+      { name: 'scooter_accessories', keywords: 'electric scooter accessories' },
+      { name: 'scooter_tire', keywords: 'scooter tire' },
+      { name: 'scooter_battery', keywords: 'scooter battery' },
+      { name: 'scooter_motor', keywords: 'scooter motor' }
+    );
+  }
+  
+  // Electric Bikes synonyms
+  if (/\b(electric bike|e-bike|ebike|folding bike|electric bicycle|electric motorcycle)\b/.test(lower)) {
+    searches.push(
+      { name: 'electric_bike', keywords: 'electric bike' },
+      { name: 'e_bike', keywords: 'e-bike' },
+      { name: 'electric_bicycle', keywords: 'electric bicycle' },
+      { name: 'folding_ebike', keywords: 'folding electric bike' },
+      { name: 'electric_motorcycle', keywords: 'electric motorcycle' },
+      { name: 'ebike_accessories', keywords: 'ebike accessories' }
+    );
+  }
+  
+  // Hoverboards & Self-balancing synonyms
+  if (/\b(hoverboard|self balancing|electric unicycle|euc|onewheel|electric skate)\b/.test(lower)) {
+    searches.push(
+      { name: 'hoverboard', keywords: 'hoverboard' },
+      { name: 'self_balancing', keywords: 'self balancing scooter' },
+      { name: 'electric_unicycle', keywords: 'electric unicycle' },
+      { name: 'euc', keywords: 'euc electric unicycle' },
+      { name: 'onewheel', keywords: 'onewheel' },
+      { name: 'electric_skate', keywords: 'electric skateboard' }
     );
   }
   
@@ -1442,8 +1489,16 @@ function detectProductCategory(title) {
     return 'tools hardware';
   }
   
-  // Car
-  if (/\b(car|auto|vehicle|motorcycle|tire|wheel|car\s*accessory|gps|car\s*care)\b/.test(lower)) {
+  // Electric Vehicles & Mobility
+  if (/\b(electric scooter|e-scooter|escooter|dualtron|xiaomi m365|ninebot|segway|kaabo|nanrobot|zero|speedway|electric skate|hoverboard|self balancing|electric unicycle|euc|onewheel|electric bike|e-bike|ebike|folding bike|electric bicycle|electric motorcycle|electric vehicle|ev mobility)\b/.test(lower)) {
+    return 'electric scooter mobility';
+  }
+  if (/\b(scooter|kick scooter|push scooter|kids scooter|adult scooter|pro scooter|stunt scooter|folding scooter|scooter wheel|scooter tire|scooter part|scooter accessory|scooter deck|scooter handle|scooter brake|scooter motor|scooter battery|scooter charger)\b/.test(lower)) {
+    return 'scooter electric mobility';
+  }
+  
+  // Automotive
+  if (/\b(car|auto|vehicle|motorcycle|automotive|tire|wheel|accessory|part|interior|exterior)\b/.test(lower)) {
     return 'automotive accessories';
   }
   
