@@ -197,22 +197,19 @@ export default async function handler(req, res) {
       });
 
       if (rawCandidates.length === 0) {
-        // Fallback: generate mock similar products for testing
-        console.log('[Similar] API returned 0 products, generating mock data');
-        const mockProducts = generateMockProducts(targetCount, productId, userCurrency);
+        console.log('[Similar] No similar products found for', productId);
         return res.status(200).json({
           success: true,
-          count: mockProducts.length,
-          products: mockProducts,
+          count: 0,
+          products: [],
           language: userLang,
           currency: userCurrency,
           isRTL,
-          candidatePoolSize: 10000,
+          candidatePoolSize: 0,
           executionTimeMs: Date.now() - t0,
           cached: false,
           similarProducts: true,
-          productId,
-          mockData: true
+          productId
         });
       }
 
@@ -506,11 +503,15 @@ async function fetchProductPage({ keywords, pageNo, sort, aliLang, currency, shi
 }
 
 // ─── Fetch Similar Products ─────────────────────────────────────
+// Note: aliexpress.affiliate.product.recommend doesn't work with SYNC endpoint
+// So we use: 1) productdetail.get to get product info, 2) search with extracted keywords
 async function fetchSimilarProducts({ productId, maxResults, aliLang, currency }) {
-  const params = {
+  // Step 1: Get product details
+  console.log('[Similar] Fetching product details for', productId);
+  const detailParams = {
     app_key: APP_KEY,
     timestamp: getChinaTimestamp(),
-    method: 'aliexpress.affiliate.product.recommend',
+    method: 'aliexpress.affiliate.productdetail.get',
     sign_method: 'md5',
     v: '2.0',
     product_id: String(productId),
@@ -519,44 +520,91 @@ async function fetchSimilarProducts({ productId, maxResults, aliLang, currency }
     tracking_id: TRACKING_ID
   };
 
-  if (maxResults) params.size = String(maxResults);
+  detailParams.sign = generateSignature(detailParams, APP_SECRET);
 
-  params.sign = generateSignature(params, APP_SECRET);
-
-  const queryString = Object.keys(params)
+  const detailQuery = Object.keys(detailParams)
     .sort((a, b) => a.localeCompare(b))
-    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(params[k])}`)
+    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(detailParams[k])}`)
     .join('&');
 
-  const response = await fetch(`${API_GATEWAY}?${queryString}`, {
+  const detailResponse = await fetch(`${API_GATEWAY}?${detailQuery}`, {
     method: 'GET',
     headers: { Accept: 'application/json' }
   });
 
-  if (!response.ok) throw new Error(`API HTTP ${response.status}`);
+  if (!detailResponse.ok) throw new Error(`API HTTP ${detailResponse.status}`);
 
-  const data = await response.json();
-  if (data.error_response) {
-    throw new Error(`AliExpress: ${data.error_response.msg || JSON.stringify(data.error_response)}`);
+  const detailData = await detailResponse.json();
+  if (detailData.error_response) {
+    throw new Error(`AliExpress: ${detailData.error_response.msg || JSON.stringify(detailData.error_response)}`);
   }
 
-  // Response structure for similar products
-  const result = data.aliexpress_affiliate_product_recommend_response;
+  // Extract product info
+  const productResult = detailData.aliexpress_affiliate_productdetail_get_response;
+  const product = productResult?.resp_result?.result || productResult?.result;
+  
+  if (!product) {
+    console.log('[Similar] Could not fetch product details');
+    return [];
+  }
+
+  // Extract keywords from product title
+  const title = product.product_title || '';
+  const keywords = title.split(' ').slice(0, 5).join(' '); // First 5 words
+  console.log('[Similar] Product title:', title.substring(0, 60));
+  console.log('[Similar] Searching with keywords:', keywords);
+
+  // Step 2: Search for similar products using the keywords
+  const searchParams = {
+    app_key: APP_KEY,
+    timestamp: getChinaTimestamp(),
+    method: 'aliexpress.affiliate.product.query',
+    sign_method: 'md5',
+    v: '2.0',
+    keyWord: keywords,
+    page_no: '1',
+    page_size: String(Math.min(maxResults || 50, 50)),
+    target_currency: currency,
+    target_language: aliLang,
+    tracking_id: TRACKING_ID
+  };
+
+  searchParams.sign = generateSignature(searchParams, APP_SECRET);
+
+  const searchQuery = Object.keys(searchParams)
+    .sort((a, b) => a.localeCompare(b))
+    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(searchParams[k])}`)
+    .join('&');
+
+  const searchResponse = await fetch(`${API_GATEWAY}?${searchQuery}`, {
+    method: 'GET',
+    headers: { Accept: 'application/json' }
+  });
+
+  if (!searchResponse.ok) throw new Error(`API HTTP ${searchResponse.status}`);
+
+  const searchData = await searchResponse.json();
+  if (searchData.error_response) {
+    throw new Error(`AliExpress: ${searchData.error_response.msg || JSON.stringify(searchData.error_response)}`);
+  }
+
+  // Parse search results
+  const result = searchData.aliexpress_affiliate_product_query_response;
   const list = result?.resp_result?.result?.products?.product
             || result?.products?.product
-            || result?.resp_result?.result?.product
-            || data?.result?.products?.product
-            || data?.products?.product;
+            || [];
 
-  if (!list) {
-    console.log('[Similar] No similar products found. Result keys:', result ? Object.keys(result) : 'no result');
+  if (!list || list.length === 0) {
+    console.log('[Similar] No similar products found');
     return [];
   }
 
   const products = Array.isArray(list) ? list : [list];
-  console.log('[Similar] Found', products.length, 'similar products for', productId);
+  // Filter out the original product
+  const filtered = products.filter(p => String(p.product_id) !== String(productId));
+  console.log('[Similar] Found', filtered.length, 'similar products for', productId);
 
-  return products;
+  return filtered;
 }
 
 // ─── Relevance Scoring ──────────────────────────────────────────
