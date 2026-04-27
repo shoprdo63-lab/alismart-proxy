@@ -578,70 +578,91 @@ async function fetchSimilarProducts({ productId, productTitle, maxResults, aliLa
   } else if (productTitle) {
     // Product NOT in affiliate API, but extension sent title - use it for accurate search
     console.log('[Similar] Product not in API, using title from extension:', productTitle.substring(0, 80));
-    const keywords = extractSearchKeywords(productTitle); // Extract smart keywords
-    console.log('[Similar] Searching with keywords:', keywords);
     
-    // Search using the title from extension - fetch multiple pages for up to 1000 results
-    console.log('[Similar] Fetching up to', maxResults, 'products with pagination');
-    const products = await fetchMultiplePages({
-      keywords,
-      maxResults,
-      productId,
-      aliLang,
-      currency
-    });
+    // Try multiple search strategies from most specific to least specific
+    const searchStrategies = buildSearchStrategies(productTitle);
     
-    if (products.length > 0) {
-      console.log('[Similar] Found', products.length, 'similar products using extension title');
-      return products;
+    for (const strategy of searchStrategies) {
+      console.log('[Similar] Trying search strategy:', strategy.name, '- keywords:', strategy.keywords);
+      
+      const products = await fetchMultiplePages({
+        keywords: strategy.keywords,
+        maxResults: Math.min(maxResults, 100), // Try smaller batch first
+        productId,
+        aliLang,
+        currency
+      });
+      
+      if (products.length >= 10) {
+        console.log('[Similar] Strategy', strategy.name, 'found', products.length, 'products - using this');
+        return products;
+      }
+      
+      console.log('[Similar] Strategy', strategy.name, 'only found', products.length, 'products - trying next');
     }
     
-    // If title search failed, fall through to generic categories
-    console.log('[Similar] Title search failed, using generic categories');
+    // If all strategies failed, return what we have from the last attempt
+    // OR try a very broad category search as absolute last resort
+    console.log('[Similar] All title strategies exhausted, trying category-based fallback');
+    const categoryKeywords = detectProductCategory(productTitle);
+    if (categoryKeywords) {
+      console.log('[Similar] Detected category:', categoryKeywords);
+      const products = await fetchMultiplePages({
+        keywords: categoryKeywords,
+        maxResults,
+        productId,
+        aliLang,
+        currency
+      });
+      if (products.length > 0) {
+        return products;
+      }
+    }
   }
   
-  // Product NOT found in affiliate API AND no title from extension - use generic category search
-  console.log('[Similar] Using generic category fallback');
+  // No title from extension and product not in API - this is last resort
+  // Try to use productId pattern to guess category, or return empty
+  console.log('[Similar] No title from extension, product not in API - limited fallback');
   
-  // Try ALL major AliExpress product categories to find similar items
-  // This covers: Electronics, Fashion, Home, Sports, Beauty, Toys, etc.
-  const fallbackKeywords = [
-    // Electronics & Gadgets
-    'headphones', 'earphones', 'bluetooth speaker', 'smart watch', 'phone case',
-    'charger', 'cable', 'power bank', 'laptop', 'tablet', 'camera', 'drone',
-    // Fashion & Accessories
-    'watch', 'sunglasses', 'jewelry', 'handbag', 'backpack', 'wallet', 'belt',
-    'shoes', 'sneakers', 'boots', 'sandals', 'clothing', 'dress', 't-shirt',
-    // Home & Garden
-    'kitchen', 'cooking', 'home decor', 'furniture', 'lighting', 'storage',
-    'tools', 'cleaning', 'garden', 'bedding', 'pillow', 'blanket',
-    // Beauty & Health
-    'makeup', 'skincare', 'perfume', 'hair', 'nail', 'beauty tools',
-    'health', 'massage', 'fitness', 'vitamins', 'supplements',
-    // Sports & Outdoors
-    'sportswear', 'sneakers', 'camping', 'fishing', 'cycling', 'yoga',
-    'gym', 'running', 'hiking', 'swimming', 'basketball', 'football',
-    // Toys & Hobbies
-    'toys', 'games', 'puzzle', 'rc car', 'doll', 'lego', 'action figure',
-    'hobby', 'craft', 'art supplies', 'musical instrument',
-    // Automotive
-    'car accessories', 'car parts', 'motorcycle', 'tools', 'gps',
-    // Baby & Kids
-    'baby clothes', 'stroller', 'toys', 'kids shoes', 'school supplies',
-    // Office & School
-    'notebook', 'pen', 'office supplies', 'printer', 'paper',
-    // Pets
-    'pet supplies', 'dog', 'cat', 'pet toys', 'pet food'
-  ];
+  // As absolute last resort, try some popular general categories
+  // But limit to a few related ones based on common product patterns
+  const limitedFallback = ['popular products', 'best sellers', 'new arrivals'];
   
-  // Return all results from fallback searches
-  return await searchFallbackCategories({
-    productId,
-    maxResults,
-    aliLang,
-    currency,
-    fallbackKeywords
-  });
+  console.log('[Similar] Trying limited general search as last resort');
+  const results = [];
+  for (const keyword of limitedFallback) {
+    if (results.length >= maxResults) break;
+    try {
+      const searchParams = {
+        keywords: keyword,
+        page_no: 1,
+        page_size: Math.min(50, maxResults),
+        target_currency: currency,
+        target_language: aliLang,
+        sort_by: 'hotDegree'
+      };
+      
+      const data = await aliexpressApi('aliexpress.ds.product.search', searchParams);
+      if (data?.products?.product) {
+        const products = data.products.product;
+        for (const p of products) {
+          if (results.length >= maxResults) break;
+          results.push(p);
+        }
+      }
+    } catch (err) {
+      console.log('[Similar] Last resort search failed for:', keyword);
+    }
+  }
+  
+  if (results.length > 0) {
+    console.log('[Similar] Last resort found', results.length, 'general products');
+    return results;
+  }
+  
+  // Truly nothing found - return empty array
+  console.log('[Similar] No products found at all');
+  return [];
 }
 
 // Helper: Search using keywords from product found in API
@@ -811,6 +832,162 @@ function extractSearchKeywords(title) {
   }
   
   return importantWords.join(' ');
+}
+
+// ─── Search Strategy Builder ─────────────────────────────────────
+/**
+ * Build multiple search strategies from product title
+ * Tries most specific keywords first, then progressively broader
+ */
+function buildSearchStrategies(title) {
+  if (!title) return [{ name: 'generic', keywords: 'popular products' }];
+  
+  const words = title.split(/\s+/).filter(w => w.length >= 2);
+  const strategies = [];
+  
+  // Strategy 1: Full title (most specific)
+  const fullKeywords = extractSearchKeywords(title);
+  if (fullKeywords) {
+    strategies.push({ name: 'full_title', keywords: fullKeywords });
+  }
+  
+  // Strategy 2: First 6 words (common pattern for product titles)
+  if (words.length > 6) {
+    const first6 = words.slice(0, 6).join(' ');
+    strategies.push({ name: 'first_6_words', keywords: first6 });
+  }
+  
+  // Strategy 3: Core product type (first 3-4 words usually contain the product type)
+  if (words.length > 3) {
+    const coreWords = words.slice(0, Math.min(4, words.length));
+    // Remove obvious decorative words
+    const cleaned = coreWords.filter(w => 
+      !/^(the|a|an|and|with|for|new|hot|best|original)$/i.test(w)
+    );
+    if (cleaned.length >= 2) {
+      strategies.push({ name: 'core_product', keywords: cleaned.join(' ') });
+    }
+  }
+  
+  // Strategy 4: Just the most important noun phrases (product category)
+  const categoryKeywords = detectProductCategory(title);
+  if (categoryKeywords && categoryKeywords !== fullKeywords) {
+    strategies.push({ name: 'category_only', keywords: categoryKeywords });
+  }
+  
+  // Strategy 5: Last resort - first 2-3 words only
+  if (words.length >= 2) {
+    const minimal = words.slice(0, 3).join(' ');
+    strategies.push({ name: 'minimal', keywords: minimal });
+  }
+  
+  return strategies;
+}
+
+/**
+ * Detect product category from title for fallback search
+ */
+function detectProductCategory(title) {
+  const lower = title.toLowerCase();
+  
+  // Electronics
+  if (/\b(headphone|earphone|speaker|bluetooth|charger|cable|phone|case|watch|laptop|tablet|camera|drone|mouse|keyboard|monitor|tv|adapter|power\s*bank)\b/.test(lower)) {
+    return 'electronics accessories';
+  }
+  
+  // Audio specifically
+  if (/\b(audio|headphone|earbud|earphone|headset|speaker|microphone|sound|music|mp3|bluetooth\s*speaker)\b/.test(lower)) {
+    return 'audio headphones speaker';
+  }
+  
+  // Fashion - Clothing
+  if (/\b(dress|shirt|t-shirt|pants|jeans|skirt|jacket|coat|sweater|suit|clothing|apparel|wear)\b/.test(lower)) {
+    return 'clothing fashion';
+  }
+  
+  // Fashion - Shoes
+  if (/\b(shoe|sneaker|boot|sandal|slipper|footwear|running\s*shoe|casual\s*shoe)\b/.test(lower)) {
+    return 'shoes footwear';
+  }
+  
+  // Fashion - Accessories
+  if (/\b(watch|sunglass|jewelry|necklace|bracelet|ring|earring|bag|handbag|backpack|wallet|belt|hat|cap|scarf)\b/.test(lower)) {
+    return 'fashion accessories';
+  }
+  
+  // Home & Garden - Furniture
+  if (/\b(furniture|chair|table|desk|sofa|couch|bed|cabinet|shelf|bookcase|wardrobe|dresser|nightstand)\b/.test(lower)) {
+    return 'furniture home';
+  }
+  
+  // Home & Garden - Decor
+  if (/\b(clock|lamp|light|lighting|decor|decoration|vase|mirror|frame|candle|pillow|cushion|curtain|rug|carpet)\b/.test(lower)) {
+    return 'home decor';
+  }
+  
+  // Kitchen
+  if (/\b(kitchen|cook| cookware|pan|pot|knife|utensil|plate|bowl|cup|mug|appliance|blender|mixer|coffee|tea)\b/.test(lower)) {
+    return 'kitchen cookware';
+  }
+  
+  // Sports
+  if (/\b(sport|fitness|gym|yoga|running|cycling|swimming|basketball|football|soccer|tennis|exercise|workout|ball)\b/.test(lower)) {
+    return 'sports fitness';
+  }
+  
+  // Toys & Games
+  if (/\b(toy|game|puzzle|lego|doll|action\s*figure|rc\s*car|board\s*game|chess|backgammon|playing\s*cards)\b/.test(lower)) {
+    return 'toys games';
+  }
+  
+  // Games specifically (chess, backgammon, etc.)
+  if (/\b(chess|backgammon|checker|board\s*game|puzzle|game\s*set)\b/.test(lower)) {
+    return 'board games chess backgammon';
+  }
+  
+  // Beauty
+  if (/\b(makeup|cosmetic|beauty|skincare|perfume|lipstick|eyeshadow|foundation|cream|lotion|shampoo|hair)\b/.test(lower)) {
+    return 'beauty makeup';
+  }
+  
+  // Health
+  if (/\b(health|massage|medical|therapy|vitamin|supplement|care|wellness|fitness\s*equipment)\b/.test(lower)) {
+    return 'health wellness';
+  }
+  
+  // Pet
+  if (/\b(pet|dog|cat|animal|bird|fish|aquarium|pet\s*food|pet\s*toy|pet\s*bed)\b/.test(lower)) {
+    return 'pet supplies';
+  }
+  
+  // Tools
+  if (/\b(tool|drill|saw|hammer|screwdriver|wrench|toolkit|repair|diy|hardware)\b/.test(lower)) {
+    return 'tools hardware';
+  }
+  
+  // Car
+  if (/\b(car|auto|vehicle|motorcycle|tire|wheel|car\s*accessory|gps|car\s*care)\b/.test(lower)) {
+    return 'automotive accessories';
+  }
+  
+  // Baby
+  if (/\b(baby|infant|toddler|diaper|stroller|baby\s*clothing|baby\s*care|maternity)\b/.test(lower)) {
+    return 'baby products';
+  }
+  
+  // Office
+  if (/\b(office|stationery|pen|pencil|notebook|paper|printer|ink|desk\s*accessory)\b/.test(lower)) {
+    return 'office supplies';
+  }
+  
+  // Storage/Organization
+  if (/\b(storage|organizer|container|box|basket|bin|rack|shelf|wardrobe\s*organizer)\b/.test(lower)) {
+    return 'storage organization';
+  }
+  
+  // Default - extract main nouns from first 4 words
+  const words = title.split(/\s+/).slice(0, 4);
+  return words.join(' ');
 }
 
 // ─── Relevance Scoring ──────────────────────────────────────────
