@@ -581,53 +581,19 @@ async function fetchSimilarProducts({ productId, productTitle, maxResults, aliLa
     const titleKeywords = productTitle.split(' ').slice(0, 5).join(' ');
     console.log('[Similar] Searching with extracted keywords:', titleKeywords);
     
-    // Search using the title from extension
-    const searchParams = {
-      app_key: APP_KEY,
-      timestamp: getChinaTimestamp(),
-      method: 'aliexpress.affiliate.product.query',
-      sign_method: 'md5',
-      v: '2.0',
-      keyWord: titleKeywords,
-      page_no: '1',
-      page_size: String(Math.min(maxResults || 50, 50)),
-      target_currency: currency,
-      target_language: aliLang,
-      tracking_id: TRACKING_ID
-    };
-
-    searchParams.sign = generateSignature(searchParams, APP_SECRET);
-
-    const searchQuery = Object.keys(searchParams)
-      .sort((a, b) => a.localeCompare(b))
-      .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(searchParams[k])}`)
-      .join('&');
-
-    try {
-      const searchResponse = await fetch(`${API_GATEWAY}?${searchQuery}`, {
-        method: 'GET',
-        headers: { Accept: 'application/json' }
-      });
-
-      if (searchResponse.ok) {
-        const searchData = await searchResponse.json();
-        if (!searchData.error_response) {
-          const result = searchData.aliexpress_affiliate_product_query_response;
-          const list = result?.resp_result?.result?.products?.product
-                    || result?.products?.product
-                    || [];
-          
-          if (list && list.length > 0) {
-            const products = Array.isArray(list) ? list : [list];
-            // Filter out the original product
-            const filtered = products.filter(p => String(p.product_id) !== String(productId));
-            console.log('[Similar] Found', filtered.length, 'similar products using extension title');
-            return filtered.slice(0, maxResults);
-          }
-        }
-      }
-    } catch (err) {
-      console.log('[Similar] Error searching with extension title:', err.message);
+    // Search using the title from extension - fetch multiple pages for up to 1000 results
+    console.log('[Similar] Fetching up to', maxResults, 'products with pagination');
+    const products = await fetchMultiplePages({
+      keywords: titleKeywords,
+      maxResults,
+      productId,
+      aliLang,
+      currency
+    });
+    
+    if (products.length > 0) {
+      console.log('[Similar] Found', products.length, 'similar products using extension title');
+      return products;
     }
     
     // If title search failed, fall through to generic categories
@@ -801,6 +767,99 @@ function buildQueryTokens(text) {
     unique.push(t);
   }
   return unique;
+}
+
+// ─── Fetch Multiple Pages for Similar Products ──────────────────
+// AliExpress limits to 50 per page, so we fetch multiple pages to get up to 1000
+async function fetchMultiplePages({ keywords, maxResults, productId, aliLang, currency }) {
+  const allProducts = [];
+  const seenIds = new Set();
+  const maxPages = Math.ceil(Math.min(maxResults, 1000) / 50); // Max 20 pages
+  
+  console.log('[Similar] Fetching', maxPages, 'pages to get', maxResults, 'products');
+  
+  for (let page = 1; page <= maxPages; page++) {
+    if (allProducts.length >= maxResults) break;
+    
+    try {
+      const searchParams = {
+        app_key: APP_KEY,
+        timestamp: getChinaTimestamp(),
+        method: 'aliexpress.affiliate.product.query',
+        sign_method: 'md5',
+        v: '2.0',
+        keyWord: keywords,
+        page_no: String(page),
+        page_size: '50', // Max allowed by AliExpress
+        target_currency: currency,
+        target_language: aliLang,
+        tracking_id: TRACKING_ID
+      };
+
+      searchParams.sign = generateSignature(searchParams, APP_SECRET);
+
+      const searchQuery = Object.keys(searchParams)
+        .sort((a, b) => a.localeCompare(b))
+        .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(searchParams[k])}`)
+        .join('&');
+
+      const searchResponse = await fetch(`${API_GATEWAY}?${searchQuery}`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' }
+      });
+
+      if (!searchResponse.ok) {
+        console.log('[Similar] Page', page, 'HTTP error:', searchResponse.status);
+        continue;
+      }
+
+      const searchData = await searchResponse.json();
+      if (searchData.error_response) {
+        console.log('[Similar] Page', page, 'API error:', searchData.error_response.msg);
+        continue;
+      }
+
+      const result = searchData.aliexpress_affiliate_product_query_response;
+      const list = result?.resp_result?.result?.products?.product
+                || result?.products?.product
+                || [];
+
+      if (list && list.length > 0) {
+        const products = Array.isArray(list) ? list : [list];
+        
+        // Add unique products (not the original productId)
+        for (const p of products) {
+          const pid = String(p.product_id);
+          if (pid !== String(productId) && !seenIds.has(pid)) {
+            seenIds.add(pid);
+            allProducts.push(p);
+            if (allProducts.length >= maxResults) break;
+          }
+        }
+        
+        console.log('[Similar] Page', page, 'found', products.length, 'products, total unique:', allProducts.length);
+        
+        // If page returned less than 50, no more pages available
+        if (products.length < 50) {
+          console.log('[Similar] Last page reached at page', page);
+          break;
+        }
+      } else {
+        console.log('[Similar] No products on page', page);
+        break;
+      }
+      
+      // Small delay between pages to avoid rate limiting
+      if (page < maxPages) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    } catch (err) {
+      console.log('[Similar] Error on page', page, ':', err.message);
+    }
+  }
+  
+  console.log('[Similar] Total unique products fetched:', allProducts.length);
+  return allProducts;
 }
 
 function tokenize(text) {
