@@ -176,7 +176,21 @@ export default async function handler(req, res) {
   const isRTL = RTL_LANGUAGES.has(userLang);
 
   const targetCount = clamp(toInt(maxResults, DEFAULT_RESULTS), 1, MAX_RESULTS);
-  const poolSize = clamp(toInt(candidatePoolSize, DEFAULT_CANDIDATE_POOL), targetCount, MAX_CANDIDATE_POOL);
+  
+  // Smart candidate pool sizing: when requesting many results, fetch more candidates
+  // to ensure we can return highly relevant products after filtering
+  const requestedPoolSize = toInt(candidatePoolSize, DEFAULT_CANDIDATE_POOL);
+  let autoPoolSize;
+  if (targetCount >= 500) {
+    autoPoolSize = MAX_CANDIDATE_POOL;
+  } else if (targetCount >= 200) {
+    autoPoolSize = 8000;
+  } else {
+    autoPoolSize = requestedPoolSize;
+  }
+  const poolSize = clamp(autoPoolSize, targetCount, MAX_CANDIDATE_POOL);
+  
+  // Higher relevance threshold for accuracy, but can be overridden
   const relevanceFloor = clamp(toInt(minRelevance, RELEVANCE_THRESHOLD), 0, 100);
 
   // Cache lookup
