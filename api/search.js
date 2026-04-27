@@ -147,6 +147,8 @@ export default async function handler(req, res) {
     productUrl,
     url,                  // backward compat alias
     productId,            // for similar products
+    productTitle,         // product title for better similar product search
+    title,                // alias for productTitle
     similar,              // flag to fetch similar products
     maxResults = DEFAULT_RESULTS,
     candidatePoolSize = DEFAULT_CANDIDATE_POOL,
@@ -205,6 +207,7 @@ export default async function handler(req, res) {
     if (isSimilarRequest && productId) {
       const rawCandidates = await fetchSimilarProducts({
         productId,
+        productTitle: productTitle || title,  // Pass title for better similar product search
         maxResults: targetCount,
         aliLang,
         currency: userCurrency
@@ -519,7 +522,7 @@ async function fetchProductPage({ keywords, pageNo, sort, aliLang, currency, shi
 // ─── Fetch Similar Products ─────────────────────────────────────
 // Note: aliexpress.affiliate.product.recommend doesn't work with SYNC endpoint
 // So we use: 1) productdetail.get to get product info, 2) search with extracted keywords
-async function fetchSimilarProducts({ productId, maxResults, aliLang, currency }) {
+async function fetchSimilarProducts({ productId, productTitle, maxResults, aliLang, currency }) {
   // Step 1: Get product details
   console.log('[Similar] Fetching product details for', productId);
   const detailParams = {
@@ -557,38 +560,103 @@ async function fetchSimilarProducts({ productId, maxResults, aliLang, currency }
   const productResult = detailData.aliexpress_affiliate_productdetail_get_response;
   const product = productResult?.resp_result?.result || productResult?.result;
   
-  let keywords;
-  
   if (product && product.product_title) {
-    // Product found in affiliate API - use its title
+    // Product found in affiliate API - use its title for search
     const title = product.product_title;
-    keywords = title.split(' ').slice(0, 5).join(' '); // First 5 words
-    console.log('[Similar] Product title:', title.substring(0, 60));
+    const keywords = title.split(' ').slice(0, 5).join(' '); // First 5 words
+    console.log('[Similar] Product title from API:', title.substring(0, 60));
     console.log('[Similar] Searching with keywords:', keywords);
-  } else {
-    // Product NOT found in affiliate API - use generic category search
-    // This ensures we always return similar products that ARE in the affiliate program
-    console.log('[Similar] Product not in affiliate program, using category fallback');
     
-    // Try multiple common product categories to find similar items
-    const fallbackKeywords = [
-      'headphones', 'earphones', 'bluetooth headset',  // Audio
-      'wireless earbuds', 'gaming headset', 'microphone', // More audio
-      'smart watch', 'phone accessories', 'charger',    // Electronics
-      'cable', 'adapter', 'power bank'                   // Accessories
-    ];
-    
-    // Return all results from fallback searches
-    return await searchFallbackCategories({
+    // Search using keywords from API product
+    return await searchWithKeywords({
+      keywords,
       productId,
       maxResults,
       aliLang,
-      currency,
-      fallbackKeywords
+      currency
     });
-  }
+  } else if (productTitle) {
+    // Product NOT in affiliate API, but extension sent title - use it for accurate search
+    console.log('[Similar] Product not in API, using title from extension:', productTitle.substring(0, 60));
+    const titleKeywords = productTitle.split(' ').slice(0, 5).join(' ');
+    console.log('[Similar] Searching with extracted keywords:', titleKeywords);
+    
+    // Search using the title from extension
+    const searchParams = {
+      app_key: APP_KEY,
+      timestamp: getChinaTimestamp(),
+      method: 'aliexpress.affiliate.product.query',
+      sign_method: 'md5',
+      v: '2.0',
+      keyWord: titleKeywords,
+      page_no: '1',
+      page_size: String(Math.min(maxResults || 50, 50)),
+      target_currency: currency,
+      target_language: aliLang,
+      tracking_id: TRACKING_ID
+    };
 
-  // Step 2: Search for similar products using the keywords
+    searchParams.sign = generateSignature(searchParams, APP_SECRET);
+
+    const searchQuery = Object.keys(searchParams)
+      .sort((a, b) => a.localeCompare(b))
+      .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(searchParams[k])}`)
+      .join('&');
+
+    try {
+      const searchResponse = await fetch(`${API_GATEWAY}?${searchQuery}`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' }
+      });
+
+      if (searchResponse.ok) {
+        const searchData = await searchResponse.json();
+        if (!searchData.error_response) {
+          const result = searchData.aliexpress_affiliate_product_query_response;
+          const list = result?.resp_result?.result?.products?.product
+                    || result?.products?.product
+                    || [];
+          
+          if (list && list.length > 0) {
+            const products = Array.isArray(list) ? list : [list];
+            // Filter out the original product
+            const filtered = products.filter(p => String(p.product_id) !== String(productId));
+            console.log('[Similar] Found', filtered.length, 'similar products using extension title');
+            return filtered.slice(0, maxResults);
+          }
+        }
+      }
+    } catch (err) {
+      console.log('[Similar] Error searching with extension title:', err.message);
+    }
+    
+    // If title search failed, fall through to generic categories
+    console.log('[Similar] Title search failed, using generic categories');
+  }
+  
+  // Product NOT found in affiliate API AND no title from extension - use generic category search
+  console.log('[Similar] Using generic category fallback');
+  
+  // Try multiple common product categories to find similar items
+  const fallbackKeywords = [
+    'headphones', 'earphones', 'bluetooth headset',  // Audio
+    'wireless earbuds', 'gaming headset', 'microphone', // More audio
+    'smart watch', 'phone accessories', 'charger',    // Electronics
+    'cable', 'adapter', 'power bank'                   // Accessories
+  ];
+  
+  // Return all results from fallback searches
+  return await searchFallbackCategories({
+    productId,
+    maxResults,
+    aliLang,
+    currency,
+    fallbackKeywords
+  });
+}
+
+// Helper: Search using keywords from product found in API
+async function searchWithKeywords({ keywords, productId, maxResults, aliLang, currency }) {
   const searchParams = {
     app_key: APP_KEY,
     timestamp: getChinaTimestamp(),
