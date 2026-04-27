@@ -11,7 +11,7 @@ import { translate } from '@vitalets/google-translate-api';
 const APP_KEY = process.env.ALI_APP_KEY || '528438';
 const APP_SECRET = process.env.ALI_APP_SECRET || 'YPhzjbGESFs75SniEK0t1wwfKhvrKIhq';
 const TRACKING_ID = process.env.ALI_TRACKING_ID || 'ali_smart_finder_v1';
-const API_GATEWAY = 'https://api-sg.aliexpress.com/sync';
+const API_GATEWAY = 'https://api-sg.aliexpress.com/rest';
 
 const PAGE_SIZE = 50;                  // AliExpress hard cap is 50 / page
 const MAX_RESULTS = 1000;              // hard ceiling on returned products
