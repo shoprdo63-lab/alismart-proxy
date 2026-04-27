@@ -579,43 +579,111 @@ async function fetchSimilarProducts({ productId, productTitle, maxResults, aliLa
     // Product NOT in affiliate API, but extension sent title - use it for accurate search
     console.log('[Similar] Product not in API, using title from extension:', productTitle.substring(0, 80));
     
+    // Build query tokens from the title for relevance scoring
+    const queryTokens = buildQueryTokens(productTitle);
+    console.log('[Similar] Query tokens for relevance:', queryTokens);
+    
     // Try multiple search strategies from most specific to least specific
     const searchStrategies = buildSearchStrategies(productTitle);
     
     for (const strategy of searchStrategies) {
       console.log('[Similar] Trying search strategy:', strategy.name, '- keywords:', strategy.keywords);
       
-      const products = await fetchMultiplePages({
+      const candidates = await fetchMultiplePages({
         keywords: strategy.keywords,
-        maxResults: Math.min(maxResults, 100), // Try smaller batch first
+        maxResults: Math.min(maxResults, 50), // Fetch more to filter
         productId,
         aliLang,
         currency
       });
       
-      if (products.length >= 10) {
-        console.log('[Similar] Strategy', strategy.name, 'found', products.length, 'products - using this');
-        return products;
+      console.log('[Similar] Strategy', strategy.name, 'returned', candidates.length, 'candidates');
+      
+      // Filter for truly relevant products
+      const relevantProducts = candidates.filter(p => {
+        const relevance = calcRelevance(queryTokens, p.product_title || p.title || '');
+        return relevance >= 10; // Must have at least 10% relevance
+      });
+      
+      console.log('[Similar] After relevance filter:', relevantProducts.length, 'products');
+      
+      if (relevantProducts.length >= 5) {
+        console.log('[Similar] Strategy', strategy.name, 'found', relevantProducts.length, 'RELEVANT products - using this');
+        return relevantProducts.slice(0, maxResults);
       }
       
-      console.log('[Similar] Strategy', strategy.name, 'only found', products.length, 'products - trying next');
+      // If we got some results but not enough, try to use them
+      if (relevantProducts.length > 0 && candidates.length > 0) {
+        // Sort by relevance and take top ones
+        const scored = candidates.map(p => ({
+          product: p,
+          relevance: calcRelevance(queryTokens, p.product_title || p.title || '')
+        })).sort((a, b) => b.relevance - a.relevance);
+        
+        const topProducts = scored.slice(0, maxResults).map(s => s.product);
+        console.log('[Similar] Using top', topProducts.length, 'products by relevance (scores:', scored.slice(0, 3).map(s => s.relevance).join(','), ')');
+        return topProducts;
+      }
     }
     
-    // If all strategies failed, return what we have from the last attempt
-    // OR try a very broad category search as absolute last resort
-    console.log('[Similar] All title strategies exhausted, trying category-based fallback');
-    const categoryKeywords = detectProductCategory(productTitle);
-    if (categoryKeywords) {
-      console.log('[Similar] Detected category:', categoryKeywords);
-      const products = await fetchMultiplePages({
-        keywords: categoryKeywords,
-        maxResults,
+    // If all strategies failed to find relevant products, try synonyms
+    console.log('[Similar] All title strategies exhausted, trying synonym searches');
+    const synonymSearches = generateSynonymSearches(productTitle);
+    
+    for (const search of synonymSearches) {
+      console.log('[Similar] Trying synonym search:', search.name, '-', search.keywords);
+      const candidates = await fetchMultiplePages({
+        keywords: search.keywords,
+        maxResults: Math.min(maxResults, 50),
         productId,
         aliLang,
         currency
       });
-      if (products.length > 0) {
-        return products;
+      
+      // Score by relevance to original query
+      const scored = candidates.map(p => ({
+        product: p,
+        relevance: calcRelevance(queryTokens, p.product_title || p.title || '')
+      })).sort((a, b) => b.relevance - a.relevance);
+      
+      // Keep only products with at least 10% relevance
+      const relevant = scored.filter(s => s.relevance >= 10);
+      
+      if (relevant.length >= 5) {
+        console.log('[Similar] Synonym search', search.name, 'found', relevant.length, 'relevant products');
+        return relevant.slice(0, maxResults).map(s => s.product);
+      }
+      
+      // If we got some results but not enough, use best ones
+      if (scored.length > 0 && relevant.length === 0) {
+        console.log('[Similar] Using top', Math.min(10, scored.length), 'products from', search.name);
+        return scored.slice(0, Math.min(maxResults, 10)).map(s => s.product);
+      }
+    }
+    
+    // Last resort: category-based search
+    console.log('[Similar] All synonym searches exhausted, trying category-based fallback');
+    const categoryKeywords = detectProductCategory(productTitle);
+    if (categoryKeywords && categoryKeywords !== extractSearchKeywords(productTitle)) {
+      console.log('[Similar] Detected category:', categoryKeywords);
+      const categoryCandidates = await fetchMultiplePages({
+        keywords: categoryKeywords,
+        maxResults: Math.min(maxResults, 50),
+        productId,
+        aliLang,
+        currency
+      });
+      
+      // Score by relevance to original query
+      const scored = categoryCandidates.map(p => ({
+        product: p,
+        relevance: calcRelevance(queryTokens, p.product_title || p.title || '')
+      })).sort((a, b) => b.relevance - a.relevance);
+      
+      const topProducts = scored.slice(0, maxResults).map(s => s.product);
+      console.log('[Similar] Category search returned', topProducts.length, 'products');
+      if (topProducts.length > 0) {
+        return topProducts;
       }
     }
   }
@@ -869,19 +937,428 @@ function buildSearchStrategies(title) {
     }
   }
   
-  // Strategy 4: Just the most important noun phrases (product category)
+  // Strategy 4: Key product words only (nouns and important adjectives)
+  const keyWords = extractKeyProductWords(title);
+  if (keyWords && keyWords !== fullKeywords) {
+    strategies.push({ name: 'key_words', keywords: keyWords });
+  }
+  
+  // Strategy 5: Individual important words combined
+  if (words.length >= 2) {
+    // Take the 2 most important words (usually the product type)
+    const importantWords = words
+      .filter(w => w.length > 3)
+      .filter(w => !/^(the|and|for|with|new|best|hot|original|authentic)$/i.test(w))
+      .slice(0, 3);
+    if (importantWords.length >= 2) {
+      strategies.push({ name: 'important_words', keywords: importantWords.join(' ') });
+    }
+  }
+  
+  // Strategy 6: Just the most important noun phrases (product category)
   const categoryKeywords = detectProductCategory(title);
   if (categoryKeywords && categoryKeywords !== fullKeywords) {
     strategies.push({ name: 'category_only', keywords: categoryKeywords });
   }
   
-  // Strategy 5: Last resort - first 2-3 words only
+  // Strategy 7: Last resort - first 2-3 words only
   if (words.length >= 2) {
     const minimal = words.slice(0, 3).join(' ');
     strategies.push({ name: 'minimal', keywords: minimal });
   }
   
+  // Strategy 8: Single most important word (broadest category match)
+  const mainProductWord = findMainProductWord(title);
+  if (mainProductWord) {
+    strategies.push({ name: 'main_word', keywords: mainProductWord });
+  }
+  
   return strategies;
+}
+
+/**
+ * Extract key product words (nouns, product types)
+ */
+function extractKeyProductWords(title) {
+  const words = title.split(/\s+/).filter(w => w.length >= 3);
+  
+  // Common product type patterns
+  const productPatterns = [
+    /\b(headphone|earphone|earbud|speaker|audio|sound|music|bluetooth|wireless|wired|stereo|bass|noise| cancelling|anc)\b/i,
+    /\b(watch|smartwatch|clock|timepiece|digital|analog|sport|fitness|health)\b/i,
+    /\b(phone|smartphone|mobile|cell|case|cover|screen|protector|charger|cable|adapter|power|battery)\b/i,
+    /\b(laptop|computer|pc|notebook|tablet|ipad|keyboard|mouse|monitor|display|webcam|usb|hub)\b/i,
+    /\b(camera|lens|tripod|flash|memory|sd|card|photography|video|action|gopro|drone|dji)\b/i,
+    /\b(shoe|sneaker|boot|sandal|slipper|footwear|running|walking|casual|formal|sport|athletic)\b/i,
+    /\b(bag|backpack|handbag|purse|wallet|luggage|suitcase|travel|tote|crossbody|shoulder)\b/i,
+    /\b(dress|shirt|t-shirt|blouse|pants|jeans|skirt|jacket|coat|sweater|hoodie|clothing|apparel)\b/i,
+    /\b(jewelry|necklace|bracelet|ring|earring|pendant|chain|gold|silver|diamond|crystal|pearl)\b/i,
+    /\b(furniture|chair|table|desk|sofa|couch|bed|cabinet|shelf|bookcase|wardrobe|dresser|nightstand)\b/i,
+    /\b(lamp|light|lighting|bulb|led|chandelier|pendant|floor|table|desk|ceiling)\b/i,
+    /\b(decor|decoration|wall|art|picture|frame|mirror|vase|sculpture|statue|figurine)\b/i,
+    /\b(kitchen|cook|cookware|pan|pot|knife|utensil|appliance|blender|mixer|coffee|tea|kettle)\b/i,
+    /\b(tool|drill|saw|hammer|screwdriver|wrench|toolkit|repair|diy|hardware|mechanic)\b/i,
+    /\b(toy|game|puzzle|lego|doll|action|figure|rc|remote|control|board|game|play|fun|educational)\b/i,
+    /\b(chess|backgammon|checker|board\s*game|playing\s*card|puzzle|strategy|tactic)\b/i,
+    /\b(sport|fitness|gym|exercise|workout|yoga|running|cycling|swimming|basketball|football|soccer)\b/i,
+    /\b(beauty|makeup|cosmetic|skincare|perfume|lipstick|eyeshadow|foundation|cream|lotion)\b/i,
+    /\b(health|massage|medical|therapy|vitamin|supplement|care|wellness|relax|pain|relief)\b/i,
+    /\b(pet|dog|cat|animal|bird|fish|aquarium|food|toy|bed|collar|leash|grooming|care)\b/i,
+    /\b(car|auto|vehicle|motorcycle|automotive|tire|wheel|accessory|part|interior|exterior)\b/i,
+    /\b(baby|infant|toddler|diaper|stroller|clothing|care|maternity|feeding|bottle|pacifier)\b/i,
+    /\b(office|stationery|pen|pencil|notebook|paper|printer|ink|supply|organizer|desk)\b/i,
+    /\b(storage|organizer|container|box|basket|bin|rack|shelf|closet|drawer|space|saver)\b/i
+  ];
+  
+  // Find matching words
+  const matchedWords = [];
+  for (const pattern of productPatterns) {
+    const match = title.match(pattern);
+    if (match) {
+      matchedWords.push(match[0]);
+    }
+  }
+  
+  // Also add any words longer than 4 chars that aren't generic
+  const genericWords = new Set([
+    'original', 'authentic', 'genuine', 'official', 'premium', 'deluxe', 'luxury',
+    'brand', 'new', 'hot', 'best', 'top', 'quality', 'high', 'pro', 'plus',
+    '2023', '2024', '2025', '2026', 'edition', 'version', 'model', 'style',
+    'sale', 'discount', 'cheap', 'affordable', 'expensive', 'price', 'cost',
+    'fast', 'quick', 'express', 'shipping', 'delivery', 'free', 'worldwide',
+    'amazon', 'aliexpress', 'ebay', 'walmart', 'target', 'shop', 'store'
+  ]);
+  
+  for (const word of words) {
+    const lower = word.toLowerCase();
+    if (!genericWords.has(lower) && word.length >= 4) {
+      matchedWords.push(word);
+    }
+  }
+  
+  // Remove duplicates and limit to most important
+  const unique = [...new Set(matchedWords)];
+  return unique.slice(0, 6).join(' ');
+}
+
+/**
+ * Find the single most important product word
+ */
+function findMainProductWord(title) {
+  const lower = title.toLowerCase();
+  
+  // Priority list of main product categories
+  const mainCategories = [
+    // Electronics
+    { word: 'headphone', patterns: [/headphone/, /earphone/, /earbud/, /headset/] },
+    { word: 'speaker', patterns: [/speaker/, /bluetooth speaker/, /subwoofer/] },
+    { word: 'charger', patterns: [/charger/, /charging/, /power bank/] },
+    { word: 'cable', patterns: [/cable/, /usb cable/, /charging cable/] },
+    { word: 'phone case', patterns: [/phone case/, /case for/, /cover for/] },
+    { word: 'smartwatch', patterns: [/smartwatch/, /smart watch/, /fitness watch/] },
+    { word: 'laptop', patterns: [/laptop/, /notebook/, /computer/] },
+    { word: 'camera', patterns: [/camera/, /webcam/, /action camera/, /gopro/] },
+    { word: 'mouse', patterns: [/mouse/, /computer mouse/] },
+    { word: 'keyboard', patterns: [/keyboard/, /mechanical keyboard/] },
+    // Fashion
+    { word: 'watch', patterns: [/watch/, /wristwatch/, /timepiece/] },
+    { word: 'sunglasses', patterns: [/sunglass/, /sun glass/, /eyewear/] },
+    { word: 'shoes', patterns: [/shoe/, /sneaker/, /footwear/, /boots/] },
+    { word: 'bag', patterns: [/bag/, /backpack/, /handbag/, /purse/] },
+    { word: 'jewelry', patterns: [/jewelry/, /jewellery/, /necklace/, /bracelet/] },
+    // Home
+    { word: 'furniture', patterns: [/furniture/, /chair/, /table/, /desk/, /sofa/] },
+    { word: 'lamp', patterns: [/lamp/, /light/, /lighting/, /bulb/] },
+    { word: 'clock', patterns: [/clock/, /wall clock/, /alarm clock/] },
+    { word: 'mirror', patterns: [/mirror/, /wall mirror/, /vanity mirror/] },
+    { word: 'curtains', patterns: [/curtain/, /drape/, /window curtain/] },
+    // Kitchen
+    { word: 'cookware', patterns: [/cookware/, /pot/, /pan/, /cooking/] },
+    { word: 'knife', patterns: [/knife/, /kitchen knife/, /chef knife/] },
+    { word: 'coffee', patterns: [/coffee/, /espresso/, /coffee maker/] },
+    // Sports
+    { word: 'yoga', patterns: [/yoga/, /yoga mat/, /yoga ball/] },
+    { word: 'fitness', patterns: [/fitness/, /gym/, /exercise/, /workout/] },
+    // Games
+    { word: 'chess', patterns: [/chess/, /chess board/, /chess set/] },
+    { word: 'backgammon', patterns: [/backgammon/, /backgammon board/] },
+    { word: 'board game', patterns: [/board game/, /boardgame/, /table game/] },
+    { word: 'puzzle', patterns: [/puzzle/, /jigsaw/, /puzzle game/] },
+    { word: 'toy', patterns: [/toy/, /toys/, /educational toy/] },
+    // Beauty
+    { word: 'makeup', patterns: [/makeup/, /cosmetic/, /beauty/] },
+    { word: 'skincare', patterns: [/skincare/, /skin care/, /facial/] },
+    // Health
+    { word: 'massage', patterns: [/massage/, /massager/, /therapy/] },
+    // Tools
+    { word: 'tools', patterns: [/tool/, /tools/, /toolkit/, /tool set/] },
+    { word: 'drill', patterns: [/drill/, /electric drill/, /power drill/] },
+    // Automotive
+    { word: 'car accessories', patterns: [/car accessory/, /auto accessory/, /vehicle/] },
+    // Baby
+    { word: 'baby products', patterns: [/baby/, /infant/, /toddler/, /maternity/] },
+    // Pet
+    { word: 'pet supplies', patterns: [/pet/, /dog/, /cat/, /pet supply/] },
+    // Storage
+    { word: 'storage', patterns: [/storage/, /organizer/, /container/, /box/] }
+  ];
+  
+  for (const category of mainCategories) {
+    for (const pattern of category.patterns) {
+      if (pattern.test(lower)) {
+        return category.word;
+      }
+    }
+  }
+  
+  // Fallback: return first significant word
+  const words = title.split(/\s+/).filter(w => w.length >= 4);
+  const skipWords = new Set(['original', 'authentic', 'official', 'premium', 'deluxe', 'luxury', 'brand', 'new', 'hot', 'best', 'top', 'quality', 'high', 'pro', 'plus']);
+  
+  for (const word of words) {
+    if (!skipWords.has(word.toLowerCase())) {
+      return word;
+    }
+  }
+  
+  return words[0] || 'product';
+}
+
+/**
+ * Generate synonym-based alternative searches
+ * Helps find products when exact match doesn't work
+ */
+function generateSynonymSearches(title) {
+  const lower = title.toLowerCase();
+  const searches = [];
+  
+  // Board games synonyms
+  if (/\b(chess|backgammon|checker|board game|boardgame)\b/.test(lower)) {
+    searches.push(
+      { name: 'board_games', keywords: 'board games' },
+      { name: 'table_games', keywords: 'table games' },
+      { name: 'strategy_games', keywords: 'strategy games' },
+      { name: 'classic_games', keywords: 'classic games' },
+      { name: 'puzzle_games', keywords: 'puzzle games' },
+      { name: 'family_games', keywords: 'family games' },
+      { name: 'chess_set', keywords: 'chess set' },
+      { name: 'chess_board', keywords: 'chess board' },
+      { name: 'game_set', keywords: 'game set' }
+    );
+  }
+  
+  // Electronics synonyms
+  if (/\b(headphone|earphone|earbud|headset)\b/.test(lower)) {
+    searches.push(
+      { name: 'audio', keywords: 'audio headphones' },
+      { name: 'earphones', keywords: 'earphones' },
+      { name: 'headset', keywords: 'headset' },
+      { name: 'wireless_audio', keywords: 'wireless audio' }
+    );
+  }
+  
+  if (/\b(speaker|bluetooth speaker|audio|sound)\b/.test(lower)) {
+    searches.push(
+      { name: 'speakers', keywords: 'bluetooth speakers' },
+      { name: 'audio', keywords: 'audio speakers' },
+      { name: 'sound', keywords: 'sound system' },
+      { name: 'portable_audio', keywords: 'portable audio' }
+    );
+  }
+  
+  if (/\b(phone case|phone cover|case for|protective case)\b/.test(lower)) {
+    searches.push(
+      { name: 'phone_accessories', keywords: 'phone accessories' },
+      { name: 'phone_protection', keywords: 'phone protection' },
+      { name: 'mobile_case', keywords: 'mobile case' }
+    );
+  }
+  
+  if (/\b(charger|charging|power bank|adapter|usb)\b/.test(lower)) {
+    searches.push(
+      { name: 'charging', keywords: 'phone charging' },
+      { name: 'power', keywords: 'power bank' },
+      { name: 'usb', keywords: 'usb charger' },
+      { name: 'accessories', keywords: 'phone accessories' }
+    );
+  }
+  
+  if (/\b(watch|smartwatch|smart watch|fitness watch)\b/.test(lower)) {
+    searches.push(
+      { name: 'smartwatch', keywords: 'smartwatch' },
+      { name: 'watches', keywords: 'digital watches' },
+      { name: 'fitness_tracker', keywords: 'fitness tracker' },
+      { name: 'wearable', keywords: 'wearable devices' }
+    );
+  }
+  
+  // Fashion synonyms
+  if (/\b(shoe|sneaker|footwear|boot|sandal)\b/.test(lower)) {
+    searches.push(
+      { name: 'footwear', keywords: 'men shoes' },
+      { name: 'sneakers', keywords: 'sneakers' },
+      { name: 'casual_shoes', keywords: 'casual shoes' },
+      { name: 'sport_shoes', keywords: 'sport shoes' }
+    );
+  }
+  
+  if (/\b(bag|backpack|handbag|purse|luggage)\b/.test(lower)) {
+    searches.push(
+      { name: 'bags', keywords: 'bags' },
+      { name: 'backpacks', keywords: 'backpacks' },
+      { name: 'travel_bag', keywords: 'travel bags' },
+      { name: 'fashion_bag', keywords: 'fashion bags' }
+    );
+  }
+  
+  if (/\b(jewelry|jewellery|necklace|bracelet|ring|earring)\b/.test(lower)) {
+    searches.push(
+      { name: 'jewelry', keywords: 'jewelry' },
+      { name: 'fashion_jewelry', keywords: 'fashion jewelry' },
+      { name: 'accessories', keywords: 'fashion accessories' },
+      { name: 'women_jewelry', keywords: 'women jewelry' }
+    );
+  }
+  
+  // Home synonyms
+  if (/\b(furniture|chair|table|desk|sofa|couch|bed|shelf|cabinet)\b/.test(lower)) {
+    searches.push(
+      { name: 'furniture', keywords: 'home furniture' },
+      { name: 'home_decor', keywords: 'home decor' },
+      { name: 'living_room', keywords: 'living room furniture' },
+      { name: 'bedroom', keywords: 'bedroom furniture' }
+    );
+  }
+  
+  if (/\b(lamp|light|lighting|bulb|led|chandelier)\b/.test(lower)) {
+    searches.push(
+      { name: 'lighting', keywords: 'home lighting' },
+      { name: 'led_lights', keywords: 'led lights' },
+      { name: 'decorative_light', keywords: 'decorative lighting' },
+      { name: 'indoor_light', keywords: 'indoor lighting' }
+    );
+  }
+  
+  if (/\b(decor|decoration|wall art|frame|mirror|vase)\b/.test(lower)) {
+    searches.push(
+      { name: 'decor', keywords: 'home decor' },
+      { name: 'wall_decor', keywords: 'wall decor' },
+      { name: 'decoration', keywords: 'home decoration' },
+      { name: 'interior', keywords: 'interior decor' }
+    );
+  }
+  
+  // Kitchen synonyms
+  if (/\b(kitchen|cook|cookware|pan|pot|utensil|appliance|coffee|tea)\b/.test(lower)) {
+    searches.push(
+      { name: 'kitchen', keywords: 'kitchen accessories' },
+      { name: 'cookware', keywords: 'cookware' },
+      { name: 'cooking', keywords: 'cooking tools' },
+      { name: 'dining', keywords: 'dining kitchen' }
+    );
+  }
+  
+  // Tools synonyms
+  if (/\b(tool|drill|saw|hammer|screwdriver|repair|diy|hardware)\b/.test(lower)) {
+    searches.push(
+      { name: 'tools', keywords: 'hand tools' },
+      { name: 'power_tools', keywords: 'power tools' },
+      { name: 'diy', keywords: 'diy tools' },
+      { name: 'repair', keywords: 'repair tools' }
+    );
+  }
+  
+  // Sports synonyms
+  if (/\b(sport|fitness|gym|exercise|workout|yoga|running|cycling)\b/.test(lower)) {
+    searches.push(
+      { name: 'fitness', keywords: 'fitness equipment' },
+      { name: 'gym', keywords: 'gym accessories' },
+      { name: 'sports', keywords: 'sports equipment' },
+      { name: 'exercise', keywords: 'exercise equipment' }
+    );
+  }
+  
+  // Beauty synonyms
+  if (/\b(beauty|makeup|cosmetic|skincare|perfume|lipstick|eyeshadow|foundation|cream)\b/.test(lower)) {
+    searches.push(
+      { name: 'makeup', keywords: 'makeup cosmetics' },
+      { name: 'skincare', keywords: 'skincare products' },
+      { name: 'beauty', keywords: 'beauty products' },
+      { name: 'personal_care', keywords: 'personal care' }
+    );
+  }
+  
+  // Health synonyms
+  if (/\b(health|massage|medical|therapy|vitamin|supplement|wellness)\b/.test(lower)) {
+    searches.push(
+      { name: 'health', keywords: 'health products' },
+      { name: 'massage', keywords: 'massage equipment' },
+      { name: 'wellness', keywords: 'wellness products' },
+      { name: 'medical', keywords: 'medical supplies' }
+    );
+  }
+  
+  // Pet synonyms
+  if (/\b(pet|dog|cat|animal|bird|fish|aquarium|food|toy|bed)\b/.test(lower)) {
+    searches.push(
+      { name: 'pet', keywords: 'pet supplies' },
+      { name: 'dog', keywords: 'dog accessories' },
+      { name: 'cat', keywords: 'cat accessories' },
+      { name: 'pet_care', keywords: 'pet care' }
+    );
+  }
+  
+  // Baby synonyms
+  if (/\b(baby|infant|toddler|diaper|stroller|feeding|maternity)\b/.test(lower)) {
+    searches.push(
+      { name: 'baby', keywords: 'baby products' },
+      { name: 'baby_care', keywords: 'baby care' },
+      { name: 'baby_gear', keywords: 'baby gear' },
+      { name: 'maternity', keywords: 'maternity baby' }
+    );
+  }
+  
+  // Automotive synonyms
+  if (/\b(car|auto|vehicle|motorcycle|automotive|tire|wheel|accessory)\b/.test(lower)) {
+    searches.push(
+      { name: 'car', keywords: 'car accessories' },
+      { name: 'auto', keywords: 'automotive accessories' },
+      { name: 'car_interior', keywords: 'car interior' },
+      { name: 'car_care', keywords: 'car care' }
+    );
+  }
+  
+  // Storage synonyms
+  if (/\b(storage|organizer|container|box|basket|bin|rack|shelf|closet)\b/.test(lower)) {
+    searches.push(
+      { name: 'storage', keywords: 'storage organization' },
+      { name: 'organizer', keywords: 'home organizer' },
+      { name: 'containers', keywords: 'storage containers' },
+      { name: 'space_saver', keywords: 'space saver' }
+    );
+  }
+  
+  // Office synonyms
+  if (/\b(office|stationery|pen|pencil|notebook|desk|school|supply)\b/.test(lower)) {
+    searches.push(
+      { name: 'office', keywords: 'office supplies' },
+      { name: 'stationery', keywords: 'stationery' },
+      { name: 'school', keywords: 'school supplies' },
+      { name: 'desk', keywords: 'desk accessories' }
+    );
+  }
+  
+  // Toys synonyms
+  if (/\b(toy|game|play|educational|kids|children|fun|entertainment)\b/.test(lower)) {
+    searches.push(
+      { name: 'toys', keywords: 'toys games' },
+      { name: 'kids_toys', keywords: 'kids toys' },
+      { name: 'educational', keywords: 'educational toys' },
+      { name: 'children', keywords: 'children toys' }
+    );
+  }
+  
+  return searches;
 }
 
 /**
