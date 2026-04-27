@@ -603,12 +603,35 @@ async function fetchSimilarProducts({ productId, productTitle, maxResults, aliLa
   // Product NOT found in affiliate API AND no title from extension - use generic category search
   console.log('[Similar] Using generic category fallback');
   
-  // Try multiple common product categories to find similar items
+  // Try ALL major AliExpress product categories to find similar items
+  // This covers: Electronics, Fashion, Home, Sports, Beauty, Toys, etc.
   const fallbackKeywords = [
-    'headphones', 'earphones', 'bluetooth headset',  // Audio
-    'wireless earbuds', 'gaming headset', 'microphone', // More audio
-    'smart watch', 'phone accessories', 'charger',    // Electronics
-    'cable', 'adapter', 'power bank'                   // Accessories
+    // Electronics & Gadgets
+    'headphones', 'earphones', 'bluetooth speaker', 'smart watch', 'phone case',
+    'charger', 'cable', 'power bank', 'laptop', 'tablet', 'camera', 'drone',
+    // Fashion & Accessories
+    'watch', 'sunglasses', 'jewelry', 'handbag', 'backpack', 'wallet', 'belt',
+    'shoes', 'sneakers', 'boots', 'sandals', 'clothing', 'dress', 't-shirt',
+    // Home & Garden
+    'kitchen', 'cooking', 'home decor', 'furniture', 'lighting', 'storage',
+    'tools', 'cleaning', 'garden', 'bedding', 'pillow', 'blanket',
+    // Beauty & Health
+    'makeup', 'skincare', 'perfume', 'hair', 'nail', 'beauty tools',
+    'health', 'massage', 'fitness', 'vitamins', 'supplements',
+    // Sports & Outdoors
+    'sportswear', 'sneakers', 'camping', 'fishing', 'cycling', 'yoga',
+    'gym', 'running', 'hiking', 'swimming', 'basketball', 'football',
+    // Toys & Hobbies
+    'toys', 'games', 'puzzle', 'rc car', 'doll', 'lego', 'action figure',
+    'hobby', 'craft', 'art supplies', 'musical instrument',
+    // Automotive
+    'car accessories', 'car parts', 'motorcycle', 'tools', 'gps',
+    // Baby & Kids
+    'baby clothes', 'stroller', 'toys', 'kids shoes', 'school supplies',
+    // Office & School
+    'notebook', 'pen', 'office supplies', 'printer', 'paper',
+    // Pets
+    'pet supplies', 'dog', 'cat', 'pet toys', 'pet food'
   ];
   
   // Return all results from fallback searches
