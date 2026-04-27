@@ -359,7 +359,7 @@ async function fetchProductPage({ keywords, pageNo, sort, aliLang, currency, shi
   const params = {
     app_key: APP_KEY,
     timestamp: new Date().toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, ''),
-    method: 'aliexpress.ds.product.search',
+    method: 'aliexpress.affiliate.product.query',
     sign_method: 'md5',
     v: '2.0',
     keyWord: keywords,           // AliExpress requires keyWord with capital K
