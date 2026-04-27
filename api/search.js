@@ -33,6 +33,16 @@ const SORT_STRATEGIES = ['LAST_VOLUME_DESC', 'SALE_PRICE_ASC', ''];
 
 const RTL_LANGUAGES = new Set(['he', 'ar', 'ur', 'fa', 'yi']);
 
+// Helper: Generate timestamp in China timezone (GMT+8) for AliExpress API
+function getChinaTimestamp() {
+  // China Standard Time is UTC+8 (no DST)
+  const now = new Date();
+  const chinaOffset = 8 * 60; // 8 hours in minutes
+  const localOffset = now.getTimezoneOffset(); // Local offset in minutes (negative for ahead of UTC)
+  const chinaTime = new Date(now.getTime() + (chinaOffset + localOffset) * 60 * 1000);
+  return chinaTime.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+}
+
 // AliExpress Affiliate API official target_language values (ISO → API code)
 // Source: Official AliExpress Open Platform docs
 // Supported: EN, RU, PT, ES, FR, ID, IT, TH, JA, AR, VI, TR, DE, HE, KO, NL, PL, MX, CL, IW, IN
@@ -420,7 +430,7 @@ async function fetchProductPageWithRetry(args, retries = 1, delayMs = 800) {
 async function fetchProductPage({ keywords, pageNo, sort, aliLang, currency, shipToCountry }) {
   const params = {
     app_key: APP_KEY,
-    timestamp: new Date().toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, ''),
+    timestamp: getChinaTimestamp(),
     method: 'aliexpress.affiliate.product.query',
     sign_method: 'md5',
     v: '2.0',
@@ -490,7 +500,7 @@ async function fetchProductPage({ keywords, pageNo, sort, aliLang, currency, shi
 async function fetchSimilarProducts({ productId, maxResults, aliLang, currency }) {
   const params = {
     app_key: APP_KEY,
-    timestamp: new Date().toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, ''),
+    timestamp: getChinaTimestamp(),
     method: 'aliexpress.affiliate.product.recommend',
     sign_method: 'md5',
     v: '2.0',
