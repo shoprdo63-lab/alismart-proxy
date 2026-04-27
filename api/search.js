@@ -308,19 +308,18 @@ export default async function handler(req, res) {
     // 5. Sort by composite score (best first)
     normalized.sort((a, b) => b.score - a.score);
 
-    // 6. Filter by relevance threshold, BUT if we don't have enough,
-    // relax the threshold progressively until we have targetCount products
+    // 6. Smart filtering: prioritize quality but always return SOMETHING
+    // If strict filtering leaves us with nothing or too few, gradually relax
     let filtered = normalized.filter(p => p.relevanceScore >= relevanceFloor);
-
-    // If not enough products pass the relevance threshold, relax it slightly
-    // but NOT below 15 to maintain quality (avoid USB chargers when searching for mics)
-    if (filtered.length < targetCount && normalized.length > 0) {
-      // Try lower thresholds but stop at 15 minimum for quality
-      const thresholds = [30, 25, 20, 15];
-      for (const threshold of thresholds) {
-        if (filtered.length >= targetCount) break;
-        filtered = normalized.filter(p => p.relevanceScore >= threshold);
-      }
+    
+    // STRATEGY: If we filtered out almost everything, use top N by score regardless
+    const MIN_PRODUCTS_TO_RETURN = Math.min(30, targetCount, normalized.length);
+    
+    if (filtered.length < MIN_PRODUCTS_TO_RETURN && normalized.length > 0) {
+      // Take top products by composite score, regardless of relevance threshold
+      // This ensures we always return the "best available" even if not perfect matches
+      console.log(`[Search] Only ${filtered.length} products passed relevance threshold, using top ${MIN_PRODUCTS_TO_RETURN} by score`);
+      filtered = normalized.slice(0, MIN_PRODUCTS_TO_RETURN);
     }
 
     // Take top products up to targetCount
@@ -338,6 +337,7 @@ export default async function handler(req, res) {
       candidatePoolSize: rawCandidates.length,
       filteredCount: filtered.length,
       droppedByRelevance: normalized.length - filtered.length,
+      minRelevanceUsed: relevanceFloor,
       fetchTimeMs: fetchMs,
       executionTimeMs: Date.now() - t0,
       products,
