@@ -9,9 +9,9 @@ import { translate } from '@vitalets/google-translate-api';
 
 // ─── Config ─────────────────────────────────────────────────────
 const APP_KEY = process.env.ALI_APP_KEY || '528438';
-const APP_SECRET = process.env.ALI_APP_SECRET || 'YPhzjbGESFs75SniEK0t1wwfKhvrKIhq';
+const APP_SECRET = process.env.ALI_APP_SECRET || 'J9gzPRjwGFIOE7UsdvOASnEnuisllPdX';
 const TRACKING_ID = process.env.ALI_TRACKING_ID || 'ali_smart_finder_v1';
-const API_GATEWAY = 'https://api-sg.aliexpress.com/rest';
+const API_GATEWAY = 'https://api-sg.aliexpress.com/sync';
 
 const PAGE_SIZE = 50;                  // AliExpress hard cap is 50 / page
 const MAX_RESULTS = 1000;              // hard ceiling on returned products
@@ -34,13 +34,22 @@ const SORT_STRATEGIES = ['LAST_VOLUME_DESC', 'SALE_PRICE_ASC', ''];
 const RTL_LANGUAGES = new Set(['he', 'ar', 'ur', 'fa', 'yi']);
 
 // Helper: Generate timestamp in China timezone (GMT+8) for AliExpress API
+// Format: YYYY-MM-DD HH:mm:ss (China Standard Time)
 function getChinaTimestamp() {
-  // China Standard Time is UTC+8 (no DST)
+  // Get current UTC time and convert to China time (UTC+8)
   const now = new Date();
-  const chinaOffset = 8 * 60; // 8 hours in minutes
-  const localOffset = now.getTimezoneOffset(); // Local offset in minutes (negative for ahead of UTC)
-  const chinaTime = new Date(now.getTime() + (chinaOffset + localOffset) * 60 * 1000);
-  return chinaTime.toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+  const utcMs = now.getTime() + (now.getTimezoneOffset() * 60000);
+  const chinaMs = utcMs + (8 * 60 * 60000); // Add 8 hours for China
+  const chinaTime = new Date(chinaMs);
+  
+  const year = chinaTime.getUTCFullYear();
+  const month = String(chinaTime.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(chinaTime.getUTCDate()).padStart(2, '0');
+  const hours = String(chinaTime.getUTCHours()).padStart(2, '0');
+  const minutes = String(chinaTime.getUTCMinutes()).padStart(2, '0');
+  const seconds = String(chinaTime.getUTCSeconds()).padStart(2, '0');
+  
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
 // AliExpress Affiliate API official target_language values (ISO → API code)
