@@ -127,6 +127,8 @@ export default async function handler(req, res) {
     keyword,              // extension sends 'keyword' (singular)
     productUrl,
     url,                  // backward compat alias
+    productId,            // for similar products
+    similar,              // flag to fetch similar products
     maxResults = DEFAULT_RESULTS,
     candidatePoolSize = DEFAULT_CANDIDATE_POOL,
     language = 'en',
@@ -140,9 +142,12 @@ export default async function handler(req, res) {
   // Support extension's 'locale' parameter (e.g., 'en_US' -> 'en')
   const effectiveLanguage = locale ? locale.split('_')[0] : language;
 
+  // Check if this is a similar products request
+  const isSimilarRequest = similar === 'true' || similar === true || productId;
+
   const searchKeywords = (keywords || q || keyword || extractTitleFromUrl(productUrl || url) || '').trim();
-  if (!searchKeywords) {
-    return res.status(400).json({ error: 'Keywords or productUrl required' });
+  if (!searchKeywords && !isSimilarRequest) {
+    return res.status(400).json({ error: 'Keywords, productUrl, or productId required' });
   }
 
   // Normalize input - use effectiveLanguage from locale if provided
@@ -163,6 +168,52 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Handle similar products request
+    if (isSimilarRequest && productId) {
+      const rawCandidates = await fetchSimilarProducts({
+        productId,
+        maxResults: targetCount,
+        aliLang,
+        currency: userCurrency
+      });
+
+      if (rawCandidates.length === 0) {
+        return res.status(200).json({
+          success: true, count: 0, products: [], language: userLang,
+          currency: userCurrency, isRTL,
+          candidatePoolSize: 0, executionTimeMs: Date.now() - t0, cached: false,
+          similarProducts: true, productId
+        });
+      }
+
+      // Normalize without relevance scoring (already similar)
+      const normalized = rawCandidates.map(p => normalizeProduct(p, userCurrency));
+      
+      // Sort by trust (sales + rating)
+      const maxSales = Math.max(...normalized.map(p => p.totalSales), 1);
+      for (const n of normalized) {
+        n.trustScore = calcTrust(n, maxSales);
+      }
+      normalized.sort((a, b) => b.trustScore - a.trustScore);
+
+      const products = normalized.slice(0, targetCount);
+      
+      const responseBody = {
+        success: true,
+        count: products.length,
+        products,
+        language: userLang,
+        currency: userCurrency,
+        isRTL,
+        candidatePoolSize: rawCandidates.length,
+        executionTimeMs: Date.now() - t0,
+        cached: false,
+        similarProducts: true,
+        productId
+      };
+      return res.status(200).json(responseBody);
+    }
+
     // 1. Translate to English when needed (AliExpress index works best in English)
     let englishKeywords = searchKeywords;
     if (autoTranslate && userLang !== 'en') {
@@ -421,6 +472,60 @@ async function fetchProductPage({ keywords, pageNo, sort, aliLang, currency, shi
     });
   }
   
+  return products;
+}
+
+// ─── Fetch Similar Products ─────────────────────────────────────
+async function fetchSimilarProducts({ productId, maxResults, aliLang, currency }) {
+  const params = {
+    app_key: APP_KEY,
+    timestamp: new Date().toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, ''),
+    method: 'aliexpress.affiliate.product.recommend',
+    sign_method: 'md5',
+    v: '2.0',
+    product_id: String(productId),
+    target_currency: currency,
+    target_language: aliLang,
+    tracking_id: TRACKING_ID
+  };
+
+  if (maxResults) params.size = String(maxResults);
+
+  params.sign = generateSignature(params, APP_SECRET);
+
+  const queryString = Object.keys(params)
+    .sort((a, b) => a.localeCompare(b))
+    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(params[k])}`)
+    .join('&');
+
+  const response = await fetch(`${API_GATEWAY}?${queryString}`, {
+    method: 'GET',
+    headers: { Accept: 'application/json' }
+  });
+
+  if (!response.ok) throw new Error(`API HTTP ${response.status}`);
+
+  const data = await response.json();
+  if (data.error_response) {
+    throw new Error(`AliExpress: ${data.error_response.msg || JSON.stringify(data.error_response)}`);
+  }
+
+  // Response structure for similar products
+  const result = data.aliexpress_affiliate_product_recommend_response;
+  const list = result?.resp_result?.result?.products?.product
+            || result?.products?.product
+            || result?.resp_result?.result?.product
+            || data?.result?.products?.product
+            || data?.products?.product;
+
+  if (!list) {
+    console.log('[Similar] No similar products found. Result keys:', result ? Object.keys(result) : 'no result');
+    return [];
+  }
+
+  const products = Array.isArray(list) ? list : [list];
+  console.log('[Similar] Found', products.length, 'similar products for', productId);
+
   return products;
 }
 
