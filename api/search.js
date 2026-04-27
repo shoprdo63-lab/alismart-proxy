@@ -563,8 +563,8 @@ async function fetchSimilarProducts({ productId, productTitle, maxResults, aliLa
   if (product && product.product_title) {
     // Product found in affiliate API - use its title for search
     const title = product.product_title;
-    const keywords = title.split(' ').slice(0, 5).join(' '); // First 5 words
-    console.log('[Similar] Product title from API:', title.substring(0, 60));
+    const keywords = extractSearchKeywords(title); // Extract smart keywords
+    console.log('[Similar] Product title from API:', title.substring(0, 80));
     console.log('[Similar] Searching with keywords:', keywords);
     
     // Search using keywords from API product
@@ -577,14 +577,14 @@ async function fetchSimilarProducts({ productId, productTitle, maxResults, aliLa
     });
   } else if (productTitle) {
     // Product NOT in affiliate API, but extension sent title - use it for accurate search
-    console.log('[Similar] Product not in API, using title from extension:', productTitle.substring(0, 60));
-    const titleKeywords = productTitle.split(' ').slice(0, 5).join(' ');
-    console.log('[Similar] Searching with extracted keywords:', titleKeywords);
+    console.log('[Similar] Product not in API, using title from extension:', productTitle.substring(0, 80));
+    const keywords = extractSearchKeywords(productTitle); // Extract smart keywords
+    console.log('[Similar] Searching with keywords:', keywords);
     
     // Search using the title from extension - fetch multiple pages for up to 1000 results
     console.log('[Similar] Fetching up to', maxResults, 'products with pagination');
     const products = await fetchMultiplePages({
-      keywords: titleKeywords,
+      keywords,
       maxResults,
       productId,
       aliLang,
@@ -750,6 +750,44 @@ async function searchFallbackCategories({ productId, maxResults, aliLang, curren
   
   console.log('[Similar] Fallback search found total', allProducts.length, 'unique products');
   return allProducts;
+}
+
+// ─── Smart Keyword Extraction ─────────────────────────────────────
+/**
+ * Extract specific search keywords from product title
+ * Keeps important words (brand, model, color, type) and removes generic words
+ */
+function extractSearchKeywords(title) {
+  if (!title) return '';
+  
+  // Words to ignore (too generic)
+  const genericWords = new Set([
+    'the', 'a', 'an', 'and', 'or', 'for', 'with', 'in', 'on', 'at', 'to', 'from',
+    'by', 'of', 'new', 'hot', 'sale', 'best', 'cheap', 'original', 'official',
+    'authentic', 'genuine', '2023', '2024', '2025', '2026', 'free', 'shipping',
+    'fast', 'delivery', 'quality', 'high', 'pro', 'plus', 'max', 'mini',
+    'ultra', 'super', 'premium', 'deluxe', 'advanced', 'standard', 'basic',
+    'upgraded', 'improved', 'latest', 'version', 'edition', 'model'
+  ]);
+  
+  // Split title into words
+  const words = title.split(/\s+/).filter(w => w.length >= 2);
+  
+  // Filter out generic words, keep important ones
+  const importantWords = [];
+  for (const word of words) {
+    const lower = word.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (lower && !genericWords.has(lower) && importantWords.length < 12) {
+      importantWords.push(word);
+    }
+  }
+  
+  // If we filtered too aggressively, use first 8 words
+  if (importantWords.length < 5 && words.length >= 5) {
+    return words.slice(0, 8).join(' ');
+  }
+  
+  return importantWords.join(' ');
 }
 
 // ─── Relevance Scoring ──────────────────────────────────────────
