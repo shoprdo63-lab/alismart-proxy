@@ -214,7 +214,58 @@ export default async function handler(req, res) {
       });
 
       if (rawCandidates.length === 0) {
-        console.log('[Similar] No similar products found for', productId);
+        console.log('[Similar] No similar products found for', productId, '- trying popular products as last resort');
+        
+        // ABSOLUTE LAST RESORT: Try to fetch popular/trending products
+        // This ensures we NEVER return empty results
+        const lastResortKeywords = [
+          'trending products', 'popular items', 'best sellers', 'hot products',
+          'top rated', 'new arrivals', 'featured products'
+        ];
+        
+        for (const keyword of lastResortKeywords) {
+          try {
+            const params = {
+              app_key: APP_KEY,
+              timestamp: getChinaTimestamp(),
+              method: 'aliexpress.affiliate.product.query',
+              sign_method: 'md5',
+              v: '2.0',
+              keyWord: keyword,
+              page_size: String(Math.min(targetCount, 50)),
+              target_currency: userCurrency,
+              target_language: aliLang,
+              sort_by: 'hotDegree'  // Trending products
+            };
+            
+            const data = await aliexpressApi('aliexpress.affiliate.product.query', params);
+            const products = data?.products?.product || [];
+            
+            if (products.length > 0) {
+              console.log('[Similar] Last resort found', products.length, 'popular products');
+              const normalized = products.map(p => normalizeProduct(p, userCurrency));
+              return res.status(200).json({
+                success: true,
+                count: normalized.length,
+                products: normalized.slice(0, targetCount),
+                language: userLang,
+                currency: userCurrency,
+                isRTL,
+                candidatePoolSize: products.length,
+                executionTimeMs: Date.now() - t0,
+                cached: false,
+                similarProducts: true,
+                productId,
+                note: 'Returning popular products as fallback'
+              });
+            }
+          } catch (err) {
+            console.log('[Similar] Last resort search failed for:', keyword);
+          }
+        }
+        
+        // If even last resort failed, return empty with explanation
+        console.log('[Similar] ALL searches failed - returning empty');
         return res.status(200).json({
           success: true,
           count: 0,
@@ -226,7 +277,8 @@ export default async function handler(req, res) {
           executionTimeMs: Date.now() - t0,
           cached: false,
           similarProducts: true,
-          productId
+          productId,
+          error: 'No products found - API may be temporarily unavailable'
         });
       }
 
