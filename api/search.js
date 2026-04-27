@@ -19,7 +19,7 @@ const DEFAULT_RESULTS = 50;            // when caller doesn't specify
 const MAX_CANDIDATE_POOL = 10000;      // upper bound of items we ever fetch
 const DEFAULT_CANDIDATE_POOL = 5000;   // sane default for relevance ranking
 const FETCH_CONCURRENCY = 8;           // parallel API requests per wave
-const RELEVANCE_THRESHOLD = 35;        // drop items scoring below this (0–100)
+const RELEVANCE_THRESHOLD = 20;        // drop items scoring below this (0–100) - lowered to allow more results
 
 const SEARCH_CACHE_TTL = 1000 * 60 * 10;            // 10 minutes
 const TRANSLATION_CACHE_TTL = 1000 * 60 * 60 * 24;  // 24 hours
