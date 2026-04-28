@@ -1870,3 +1870,36 @@ function toInt(value, fallback) {
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
+
+// ─── Generic AliExpress API Caller ──────────────────────────────
+async function aliexpressApi(method, params) {
+  const merged = {
+    app_key: APP_KEY,
+    timestamp: getChinaTimestamp(),
+    method,
+    sign_method: 'md5',
+    v: '2.0',
+    ...params
+  };
+
+  merged.sign = generateSignature(merged, APP_SECRET);
+
+  const queryString = Object.keys(merged)
+    .sort((a, b) => a.localeCompare(b))
+    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(merged[k])}`)
+    .join('&');
+
+  const response = await fetch(`${API_GATEWAY}?${queryString}`, {
+    method: 'GET',
+    headers: { Accept: 'application/json' }
+  });
+
+  if (!response.ok) throw new Error(`API HTTP ${response.status}`);
+
+  const data = await response.json();
+  if (data.error_response) {
+    throw new Error(`AliExpress: ${data.error_response.msg || JSON.stringify(data.error_response)}`);
+  }
+
+  return data;
+}
